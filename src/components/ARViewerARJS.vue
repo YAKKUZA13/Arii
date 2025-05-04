@@ -1,16 +1,23 @@
 <template>
   <div class="ar-viewer">
+    <!-- Индикатор ориентации для мобильных устройств -->
+    <div v-if="showOrientationMessage" class="orientation-message">
+      Пожалуйста, поверните устройство в горизонтальное положение
+    </div>
+
     <a-scene
       embedded
       arjs="trackingMethod: best; sourceType: webcam; debugUIEnabled: true; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
       renderer="logarithmicDepthBuffer: true; precision: medium;"
       vr-mode-ui="enabled: false"
+      :class="{ 'mobile-view': isMobile }"
     >
       <!-- Камера с поддержкой GPS и ориентации -->
       <a-camera
         gps-camera
         rotation-reader
         device-orientation-permission-ui="enabled: true"
+        :look-controls="isMobile ? 'enabled: true' : 'enabled: true'"
       ></a-camera>
 
       <!-- 3D модели с разбросом координат -->
@@ -67,10 +74,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 // Состояние загрузки
 const userPosition = ref(null)
+const isMobile = ref(false)
+const showOrientationMessage = ref(false)
 
 // Константы для генерации координат
 const radius = 15 // радиус в метрах
@@ -78,6 +87,18 @@ const numberOfModels = 5 // количество моделей
 
 // Массив координат с дополнительными параметрами
 const coordinates = ref([])
+
+// Функция для определения мобильного устройства
+const checkMobile = () => {
+  isMobile.value = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+}
+
+// Функция для проверки ориентации экрана
+const checkOrientation = () => {
+  if (isMobile.value) {
+    showOrientationMessage.value = window.innerHeight > window.innerWidth
+  }
+}
 
 // Функция для расчета расстояния между двумя точками
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -138,6 +159,16 @@ const TEST_COORDINATES = {
 
 onMounted(async () => {
   console.log('Начало инициализации AR')
+  
+  // Проверяем мобильное устройство
+  checkMobile()
+  
+  // Добавляем обработчики событий
+  window.addEventListener('resize', checkOrientation)
+  window.addEventListener('orientationchange', checkOrientation)
+  
+  // Проверяем ориентацию
+  checkOrientation()
   
   try {
     console.log('Запрос геолокации...')
@@ -215,6 +246,12 @@ onMounted(async () => {
     alert(`AR ошибка: ${error.message}`)
   }
 })
+
+onUnmounted(() => {
+  // Удаляем обработчики событий
+  window.removeEventListener('resize', checkOrientation)
+  window.removeEventListener('orientationchange', checkOrientation)
+})
 </script>
 
 <style scoped>
@@ -222,6 +259,7 @@ onMounted(async () => {
   width: 100%;
   height: 100vh;
   position: relative;
+  overflow: hidden;
 }
 
 a-scene {
@@ -229,15 +267,30 @@ a-scene {
   height: 100%;
 }
 
-.loading {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 24px;
+.orientation-message {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.8);
   color: white;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 20px;
-  border-radius: 8px;
+  text-align: center;
+  padding: 15px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+/* Стили для мобильных устройств */
+@media (max-width: 768px) {
+  .ar-viewer {
+    touch-action: none;
+  }
+  
+  a-scene.mobile-view {
+    touch-action: none;
+  }
 }
 </style> 
