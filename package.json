@@ -8,12 +8,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.3.4",
-    "aframe": "^1.4.2"
+    "aframe": "^1.7.1",
+    "ar.js": "^2.2.2",
+    "three": "^0.176.0",
+    "vue": "^3.3.4"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^4.2.3",
     "@vitejs/plugin-basic-ssl": "^1.0.1",
+    "@vitejs/plugin-vue": "^4.2.3",
     "vite": "^4.4.9"
   }
 }
