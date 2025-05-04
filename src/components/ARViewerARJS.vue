@@ -5,6 +5,12 @@
       Пожалуйста, поверните устройство в горизонтальное положение
     </div>
 
+    <!-- Отладочная информация -->
+    <div v-if="isMobile" class="debug-info">
+      <p>Модель: {{ modelPath }}</p>
+      <p>Координаты: {{ userPosition ? `${userPosition.lat}, ${userPosition.lng}` : 'не определены' }}</p>
+    </div>
+
     <a-scene
       embedded
       arjs="trackingMethod: best; sourceType: webcam; debugUIEnabled: true; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
@@ -18,20 +24,22 @@
         rotation-reader
         device-orientation-permission-ui="enabled: true"
         :look-controls="isMobile ? 'enabled: true' : 'enabled: true'"
+        :gps-camera="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
       ></a-camera>
 
-      <!-- 3D модели с разбросом координат -->
+      <!-- Одна 3D модель -->
       <a-entity
-        v-for="(coord, index) in coordinates"
-        :key="index"
+        v-if="coordinates.length > 0"
         gps-entity-place
-        :latitude="coord.lat"
-        :longitude="coord.lng"
-        gltf-model="url(/assets/models/grusha.glb)"
-        :scale="`${coord.scale} ${coord.scale} ${coord.scale}`"
-        :rotation="`0 ${coord.rotation} 0`"
+        :latitude="coordinates[0].lat"
+        :longitude="coordinates[0].lng"
+        :gltf-model="modelPath"
+        :scale="`${coordinates[0].scale} ${coordinates[0].scale} ${coordinates[0].scale}`"
+        :rotation="`90 90 90`"
         animation-mixer="clip: *; loop: repeat"
         @model-error="handleModelError"
+        @model-loaded="handleModelLoaded"
+        :gps-entity-place="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
       >
         <!-- Добавляем индикатор расстояния -->
         <a-entity
@@ -44,7 +52,7 @@
             height="0.5"
           ></a-plane>
           <a-text
-            :value="`${coord.distance.toFixed(1)}м`"
+            :value="`${coordinates[0].distance.toFixed(1)}м`"
             align="center"
             color="black"
             position="0 0 0.01"
@@ -61,6 +69,7 @@
         :latitude="userPosition.lat"
         :longitude="userPosition.lng"
         position="0 0 0"
+        :gps-entity-place="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
       >
         <a-ring
           color="yellow"
@@ -80,10 +89,12 @@ import { ref, onMounted, onUnmounted } from 'vue'
 const userPosition = ref(null)
 const isMobile = ref(false)
 const showOrientationMessage = ref(false)
+const modelPath = ref('/assets/models/grusha.glb')
+const modelsGenerated = ref(false)
 
 // Константы для генерации координат
-const radius = 15 // радиус в метрах
-const numberOfModels = 5 // количество моделей
+const radius = 2 // радиус в метрах
+const numberOfModels = 1 // количество моделей
 
 // Массив координат с дополнительными параметрами
 const coordinates = ref([])
@@ -91,13 +102,26 @@ const coordinates = ref([])
 // Функция для определения мобильного устройства
 const checkMobile = () => {
   isMobile.value = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+  console.log('Мобильное устройство:', isMobile.value)
 }
 
 // Функция для проверки ориентации экрана
 const checkOrientation = () => {
   if (isMobile.value) {
     showOrientationMessage.value = window.innerHeight > window.innerWidth
+    console.log('Ориентация экрана:', showOrientationMessage.value ? 'вертикальная' : 'горизонтальная')
   }
+}
+
+// Обработчик успешной загрузки модели
+const handleModelLoaded = (event) => {
+  console.log('Модель успешно загружена:', event)
+}
+
+// Обработчик ошибок загрузки модели
+const handleModelError = (error) => {
+  console.error('Ошибка загрузки модели:', error)
+  console.log('Путь к модели:', modelPath.value)
 }
 
 // Функция для расчета расстояния между двумя точками
@@ -115,40 +139,36 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 
 // Функция для генерации случайных координат в радиусе
 const generateRandomCoordinates = (centerLat, centerLng) => {
+  if (modelsGenerated.value) return // Не генерируем модели повторно
+  
   const R = 6371000 // радиус Земли в метрах
   const coords = []
   
-  for (let i = 0; i < numberOfModels; i++) {
-    // Генерируем случайный угол и расстояние
-    const angle = Math.random() * 2 * Math.PI
-    const distance = Math.random() * radius
-    
-    // Конвертируем расстояние в градусы
-    const latDistance = distance / R
-    const lngDistance = distance / (R * Math.cos(centerLat * Math.PI / 180))
-    
-    // Вычисляем новые координаты
-    const newLat = centerLat + (latDistance * 180 / Math.PI)
-    const newLng = centerLng + (lngDistance * 180 / Math.PI)
-    
-    // Вычисляем расстояние от центра
-    const dist = calculateDistance(centerLat, centerLng, newLat, newLng)
-    
-    coords.push({
-      lat: newLat,
-      lng: newLng,
-      distance: dist,
-      scale: 1 + Math.random() * 0.5, // случайный масштаб
-      rotation: Math.random() * 360 // случайный поворот
-    })
-  }
+  // Генерируем только одну модель
+  const angle = Math.random() * 2 * Math.PI
+  const distance = radius // Фиксированное расстояние
   
+  // Конвертируем расстояние в градусы
+  const latDistance = distance / R
+  const lngDistance = distance / (R * Math.cos(centerLat * Math.PI / 180))
+  
+  // Вычисляем новые координаты
+  const newLat = centerLat + (latDistance * 180 / Math.PI)
+  const newLng = centerLng + (lngDistance * 180 / Math.PI)
+  
+  // Вычисляем расстояние от центра
+  const dist = calculateDistance(centerLat, centerLng, newLat, newLng)
+  
+  coords.push({
+    lat: newLat,
+    lng: newLng,
+    distance: dist,
+    scale: isMobile.value ? 0.8 : 1.2, // Фиксированный масштаб
+    rotation: 0
+  })
+  
+  modelsGenerated.value = true
   return coords
-}
-
-// Обработчик ошибок загрузки модели
-const handleModelError = (error) => {
-  console.error('Ошибка загрузки модели:', error)
 }
 
 // Тестовые координаты (Москва)
@@ -173,7 +193,7 @@ onMounted(async () => {
   try {
     console.log('Запрос геолокации...')
     
-    // Пробуем получить геолокацию с увеличенным таймаутом
+    // Получаем геолокацию один раз
     const pos = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         console.log('Используем тестовые координаты из-за таймаута')
@@ -216,31 +236,13 @@ onMounted(async () => {
     }
     console.log('Координаты получены:', userPosition.value)
     
-    // Генерируем координаты вокруг текущей позиции
+    // Генерируем координаты вокруг текущей позиции один раз
     coordinates.value = generateRandomCoordinates(
       userPosition.value.lat,
       userPosition.value.lng
     )
     console.log('Координаты сгенерированы:', coordinates.value)
-
-    // Добавляем слушатель изменения геопозиции
-    navigator.geolocation.watchPosition(
-      (position) => {
-        console.log('Обновление геопозиции:', position)
-        userPosition.value = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        }
-      },
-      (error) => {
-        console.error('Ошибка отслеживания геопозиции:', error)
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
-      }
-    )
+    
   } catch (error) {
     console.error('Ошибка инициализации AR:', error)
     alert(`AR ошибка: ${error.message}`)
@@ -281,6 +283,18 @@ a-scene {
   align-items: center;
   justify-content: center;
   font-size: 16px;
+}
+
+.debug-info {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 10px;
+  font-size: 12px;
+  z-index: 1000;
 }
 
 /* Стили для мобильных устройств */
