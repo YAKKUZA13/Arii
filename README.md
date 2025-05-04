@@ -1,5 +1,50 @@
-# Vue 3 + Vite
+# AR-Vue-App
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Приложение дополненной реальности (AR), разработанное с использованием Vue.js и A-Frame.
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## Описание
+
+Это приложение позволяет пользователям взаимодействовать с дополненной реальностью через веб-браузер. Проект использует современные веб-технологии для создания иммерсивного AR-опыта.
+
+## Технологии
+
+- Vue.js 3
+- A-Frame
+- Vite
+- Node.js
+
+## Требования
+
+- Node.js (рекомендуется версия 16 или выше)
+- Современный веб-браузер с поддержкой WebXR
+
+## Установка
+
+ Установите зависимости:
+```bash
+npm install
+```
+
+## Запуск проекта
+
+### Разработка
+```bash
+npm run dev
+```
+
+### Сборка для продакшена
+```bash
+npm run build
+```
+
+### Предпросмотр собранного проекта
+```bash
+npm run preview
+```
+
+## Структура проекта
+
+- `/src` - исходный код приложения
+- `/public` - статические файлы
+- `/server` - серверная часть приложения
+- `/uploads` - директория для загруженных файлов
