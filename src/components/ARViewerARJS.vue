@@ -11,93 +11,24 @@
       <p>Координаты: {{ userPosition ? `${userPosition.lat}, ${userPosition.lng}` : 'не определены' }}</p>
     </div>
 
-    <a-scene
-      embedded
-      arjs="trackingMethod: best; sourceType: webcam; debugUIEnabled: true; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
-      renderer="logarithmicDepthBuffer: true; precision: medium;"
-      vr-mode-ui="enabled: false"
-      :class="{ 'mobile-view': isMobile }"
-    >
-      <!-- Камера с поддержкой GPS и ориентации -->
-      <a-camera
-        gps-camera
-        rotation-reader
-        device-orientation-permission-ui="enabled: true"
-        :look-controls="isMobile ? 'enabled: true' : 'enabled: true'"
-        :gps-camera="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
-      ></a-camera>
-
-      <!-- Одна 3D модель -->
-      <a-entity
-        v-if="coordinates.length > 0"
-        gps-entity-place
-        :latitude="coordinates[0].lat"
-        :longitude="coordinates[0].lng"
-        :gltf-model="modelPath"
-        :scale="`${coordinates[0].scale} ${coordinates[0].scale} ${coordinates[0].scale}`"
-        :rotation="`90 90 90`"
-        animation-mixer="clip: *; loop: repeat"
-        @model-error="handleModelError"
-        @model-loaded="handleModelLoaded"
-        :gps-entity-place="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
-      >
-        <!-- Добавляем индикатор расстояния -->
-        <a-entity
-          position="0 2 0"
-          scale="2 2 2"
-        >
-          <a-plane
-            :material="`color: white; opacity: 0.7;`"
-            width="1"
-            height="0.5"
-          ></a-plane>
-          <a-text
-            :value="`${coordinates[0].distance.toFixed(1)}м`"
-            align="center"
-            color="black"
-            position="0 0 0.01"
-            width="1"
-            font="mozillavr"
-          ></a-text>
-        </a-entity>
-      </a-entity>
-
-      <!-- Добавляем индикатор направления -->
-      <a-entity
-        v-if="userPosition"
-        gps-entity-place
-        :latitude="userPosition.lat"
-        :longitude="userPosition.lng"
-        position="0 0 0"
-        :gps-entity-place="isMobile ? 'minDistance: 0; maxDistance: 1000;' : 'minDistance: 0; maxDistance: 1000;'"
-      >
-        <a-ring
-          color="yellow"
-          radius-inner="0.1"
-          radius-outer="0.2"
-          rotation="-90 0 0"
-        ></a-ring>
-      </a-entity>
-    </a-scene>
+    <div ref="sceneContainer" class="scene-container"></div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-
+import * as LocAR from 'locar'
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // Состояние загрузки
 const userPosition = ref(null)
 const isMobile = ref(false)
 const showOrientationMessage = ref(false)
 const modelPath = ref('/assets/models/grusha.glb')
-const modelsGenerated = ref(false)
+const sceneContainer = ref(null)
 
 // Константы для генерации координат
 const radius = 2 // радиус в метрах
-const numberOfModels = 1 // количество моделей
-
-// Массив координат с дополнительными параметрами
-const coordinates = ref([])
 
 // Функция для определения мобильного устройства
 const checkMobile = () => {
@@ -113,15 +44,23 @@ const checkOrientation = () => {
   }
 }
 
-// Обработчик успешной загрузки модели
-const handleModelLoaded = (event) => {
-  console.log('Модель успешно загружена:', event)
-}
-
-// Обработчик ошибок загрузки модели
-const handleModelError = (error) => {
-  console.error('Ошибка загрузки модели:', error)
-  console.log('Путь к модели:', modelPath.value)
+// Функция для загрузки модели
+const loadModel = async (url) => {
+  const loader = new GLTFLoader()
+  return new Promise((resolve, reject) => {
+    loader.load(
+      url,
+      (gltf) => {
+        console.log('Модель успешно загружена')
+        resolve(gltf.scene)
+      },
+      undefined,
+      (error) => {
+        console.error('Ошибка загрузки модели:', error)
+        reject(error)
+      }
+    )
+  })
 }
 
 // Функция для расчета расстояния между двумя точками
@@ -137,44 +76,32 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return R * c
 }
 
-// Функция для генерации случайных координат в радиусе
-const generateRandomCoordinates = (centerLat, centerLng) => {
-  if (modelsGenerated.value) return // Не генерируем модели повторно
-  
+// Функция для генерации координат в радиусе
+const generateCoordinates = (centerLat, centerLng) => {
   const R = 6371000 // радиус Земли в метрах
-  const coords = []
-  
-  // Генерируем только одну модель
   const angle = Math.random() * 2 * Math.PI
-  const distance = radius // Фиксированное расстояние
-  
-  // Конвертируем расстояние в градусы
+  const distance = radius
+    
   const latDistance = distance / R
   const lngDistance = distance / (R * Math.cos(centerLat * Math.PI / 180))
   
-  // Вычисляем новые координаты
   const newLat = centerLat + (latDistance * 180 / Math.PI)
   const newLng = centerLng + (lngDistance * 180 / Math.PI)
   
-  // Вычисляем расстояние от центра
   const dist = calculateDistance(centerLat, centerLng, newLat, newLng)
   
-  coords.push({
+  return {
     lat: newLat,
     lng: newLng,
-    distance: dist,
-    scale: isMobile.value ? 0.8 : 1.2, // Фиксированный масштаб
-    rotation: 0
-  })
-  
-  modelsGenerated.value = true
-  return coords
+    distance: dist
+  }
 }
 
 // Тестовые координаты (Москва)
 const TEST_COORDINATES = {
   lat: 55.7558,
-  lng: 37.6173
+  lng: 37.6173,
+  accuracy: 100
 }
 
 onMounted(async () => {
@@ -193,18 +120,21 @@ onMounted(async () => {
   try {
     console.log('Запрос геолокации...')
     
-    // Получаем геолокацию один раз
+    // Получаем геолокацию с улучшенной обработкой ошибок
     const pos = await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        console.log('Используем тестовые координаты из-за таймаута')
-        resolve({
-          coords: {
-            latitude: TEST_COORDINATES.lat,
-            longitude: TEST_COORDINATES.lng,
-            accuracy: 100
-          }
+      if (!navigator.geolocation) {
+        console.warn('Геолокация не поддерживается')
+        return resolve({
+          coords: TEST_COORDINATES
         })
-      }, 10000) // 10 секунд таймаут
+      }
+
+      const timeout = setTimeout(() => {
+        console.log('Таймаут: используем тестовые координаты')
+        resolve({
+          coords: TEST_COORDINATES
+        })
+      }, 10000)
 
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -213,13 +143,9 @@ onMounted(async () => {
         },
         (error) => {
           clearTimeout(timeout)
-          console.log('Ошибка геолокации, используем тестовые координаты:', error)
+          console.log('Ошибка геолокации:', error)
           resolve({
-            coords: {
-              latitude: TEST_COORDINATES.lat,
-              longitude: TEST_COORDINATES.lng,
-              accuracy: 100
-            }
+            coords: TEST_COORDINATES
           })
         },
         {
@@ -230,18 +156,42 @@ onMounted(async () => {
       )
     })
     
+    // Гарантированное получение координат
     userPosition.value = {
-      lat: pos.coords.latitude,
-      lng: pos.coords.longitude
+      lat: pos.coords.latitude || TEST_COORDINATES.lat,
+      lng: pos.coords.longitude || TEST_COORDINATES.lng
     }
-    console.log('Координаты получены:', userPosition.value)
     
-    // Генерируем координаты вокруг текущей позиции один раз
-    coordinates.value = generateRandomCoordinates(
+    console.log('Используемые координаты:', userPosition.value)
+    
+    // Генерируем координаты для модели с проверкой
+    const modelCoords = generateCoordinates(userPosition.value.lat, userPosition.value.lng)
+    console.log('Координаты модели:', modelCoords)
+    
+    // Инициализируем LocAR с явным указанием позиции
+    const locar = new LocAR.LocationBased(sceneContainer.value)
+    
+    // Явная инициализация GPS перед добавлением объектов
+    locar.startGps(
       userPosition.value.lat,
-      userPosition.value.lng
+      userPosition.value.lng,
+      0 // Высота
     )
-    console.log('Координаты сгенерированы:', coordinates.value)
+    
+    // Загружаем и добавляем модель
+    const model = await loadModel(modelPath.value)
+    model.scale.set(0.8, 0.8, 0.8)
+    
+    locar.add(model, {
+      lat: modelCoords.lat,
+      lon: modelCoords.lng,
+      alt: 0
+    })
+    
+    // Обработчик обновления позиции
+    locar.onGpsUpdate = (position) => {
+      console.log('GPS обновлен:', position)
+    }
     
   } catch (error) {
     console.error('Ошибка инициализации AR:', error)
@@ -264,7 +214,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-a-scene {
+.scene-container {
   width: 100%;
   height: 100%;
 }
@@ -303,7 +253,7 @@ a-scene {
     touch-action: none;
   }
   
-  a-scene.mobile-view {
+  .scene-container {
     touch-action: none;
   }
 }
