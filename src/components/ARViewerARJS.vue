@@ -6,7 +6,7 @@
       renderer="logarithmicDepthBuffer: true;"
     >
     <a-entity
-  gltf-model="/models/grusha.glb"
+  gltf-model="/models/drage.glb"
   scale="0.5 0.5 0.5"
   position="0 0 -2"
   rotation="0 90 0"
