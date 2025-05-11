@@ -5,42 +5,44 @@
       arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
       renderer="logarithmicDepthBuffer: true;"
     >
-    <a-entity
-  gltf-model="/models/drage.glb"
-  scale="0.5 0.5 0.5"
-  position="0 0 -2"
-  rotation="0 90 0"
-  animation="property: rotation; to: 0 450 0; loop: true; dur: 10000;"
-  clickable
-  draggable
-  rotatable
-  scalable
-  hoverable="
-    hoverProperty: scale;
-    hoverValue: 0.6 0.6 0.6;
-    originalValue: 0.5 0.5 0.5"
-  gesture-handler="
-    dragEnabled: true;
-    rotateEnabled: true;
-    pinchEnabled: true"
->
-</a-entity>
+      <a-entity
+        gltf-model="/models/drage.glb"
+        scale="0.5 0.5 0.5"
+        position="0 0 -2"
+        rotation="0 90 0"
+        animation="property: rotation; to: 0 450 0; loop: true; dur: 10000;"
+        clickable
+        draggable
+        rotatable
+        scalable
+        hoverable="
+          hoverProperty: scale;
+          hoverValue: 0.6 0.6 0.6;
+          originalValue: 0.5 0.5 0.5"
+        gesture-handler="
+          dragEnabled: true;
+          rotateEnabled: true;
+          pinchEnabled: true"
+      >
+      </a-entity>
 
+      <a-entity id="camera-wrapper" camera look-controls>
+        <a-entity 
+          cursor="rayOrigin: mouse; fuse: false"
+          position="0 0 -1"
+          geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
+          material="color: #CCC; shader: flat">
+        </a-entity>
+        <a-entity 
+          id="glitch-overlay"
+          geometry="primitive: plane; width: 4; height: 3"
+          material="shader: glitch; transparent: true; visible: false">
+        </a-entity>
+      </a-entity>
 
-    
-<a-entity camera look-controls>
-  <a-entity 
-    cursor="rayOrigin: mouse; fuse: false"
-    position="0 0 -1"
-    geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
-    material="color: #CCC; shader: flat">
-  </a-entity>
-</a-entity>
+      <a-entity id="detected-markers"></a-entity>
+    </a-scene>
 
-
-  </a-scene>
-
-    <!-- Сообщение о неподдерживаемом устройстве -->
     <div v-if="!isSupported" class="ar-not-supported">
       Ваше устройство не поддерживает AR. Пожалуйста, используйте современный браузер с поддержкой AR.js.
     </div>
@@ -48,18 +50,71 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import * as tf from '@tensorflow/tfjs'
+import * as cocoSsd from '@tensorflow-models/coco-ssd'
 
 const isSupported = ref(true)
-const marker = ref(null)
 const model = ref(null)
-const fixedModelPosition = ref(null)
+const video = ref(null)
+const canvas = ref(null)
+const ctx = ref(null)
+const animationFrame = ref(null)
+const intensity = ref(0.7)
 
+// Регистрация кастомного шейдера
+AFRAME.registerShader('glitch', {
+  schema: {
+    time: { type: 'time', is: 'uniform' },
+    maskTexture: { type: 'map', is: 'uniform' },
+    intensity: { type: 'number', default: 0.5 }
+  },
 
-onMounted(() => {
-  // Проверяем поддержку WebGL
-  const canvas = document.createElement('canvas')
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+
+  fragmentShader: `
+    uniform float time;
+    uniform sampler2D maskTexture;
+    uniform float intensity;
+    varying vec2 vUv;
+
+    float random(vec2 st) {
+      return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+    }
+
+    void main() {
+      vec4 mask = texture2D(maskTexture, vUv);
+      
+      if (mask.r > 0.5) {
+        vec2 uv = vUv;
+        float glitchIntensity = intensity * 0.1;
+        
+        uv.x += (random(vec2(time)) - 0.5) * glitchIntensity;
+        uv.y += (random(vec2(time * 0.7)) - 0.5) * glitchIntensity;
+        
+        vec3 color;
+        color.r = texture2D(maskTexture, uv + vec2(glitchIntensity * 0.02, 0.0)).r;
+        color.g = texture2D(maskTexture, uv + vec2(0.0, glitchIntensity * 0.02)).g;
+        color.b = texture2D(maskTexture, uv - vec2(glitchIntensity * 0.02, 0.0)).b;
+        
+        gl_FragColor = vec4(color, 1.0);
+      } else {
+        gl_FragColor = vec4(0.0);
+      }
+    }
+  `
+})
+
+onMounted(async () => {
+  // Проверка поддержки WebGL
+  const canvasCheck = document.createElement('canvas')
+  const gl = canvasCheck.getContext('webgl') || canvasCheck.getContext('experimental-webgl')
   isSupported.value = !!gl
   AFRAME.registerComponent('persistent-position', {
     tick: function() {
@@ -82,7 +137,6 @@ onMounted(() => {
     }
   })
 
-  // Компонент для перетаскивания
   AFRAME.registerComponent('draggable', {
     init: function() {
       this.el.setAttribute('gesture-handler', {
@@ -93,7 +147,6 @@ onMounted(() => {
     }
   })
 
-  // Компонент для масштабирования
   AFRAME.registerComponent('scalable', {
     init: function() {
       this.el.setAttribute('gesture-handler', {
@@ -103,7 +156,6 @@ onMounted(() => {
     }
   })
 
-  // Компонент для вращения
   AFRAME.registerComponent('rotatable', {
     init: function() {
       this.el.setAttribute('gesture-handler', {
@@ -113,7 +165,6 @@ onMounted(() => {
     }
   })
 
-  // Компонент для hover-эффектов
   AFRAME.registerComponent('hoverable', {
     schema: {
       hoverProperty: { type: 'string', default: 'scale' },
@@ -133,7 +184,6 @@ onMounted(() => {
     }
   })
 
-  // Инициализация жестов
   AFRAME.registerComponent('gesture-handler', {
     schema: {
       enabled: { default: true },
@@ -205,4 +255,12 @@ onMounted(() => {
   border-radius: 8px;
   text-align: center;
 }
-</style> 
+
+#glitch-overlay {
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+}
+</style>
