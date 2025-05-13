@@ -2,8 +2,9 @@
   <div class="ar-container">
     <a-scene
       embedded
+      shadow="type: pcfsoft"
       arjs="sourceType: webcam; 
-            debugUIEnabled: true; 
+            debugUIEnabled: false; 
             detectionMode: mono; 
             sourceWidth: 1280;
             sourceHeight: 720;
@@ -12,12 +13,6 @@
             maxDetectionRate: 60;
             canvasWidth: 1280;
             canvasHeight: 720;
-            sourceType: webcam;
-            sourceWidth: 1280;
-            sourceHeight: 720;
-            displayWidth: 1280;
-            displayHeight: 720;
-            debugUIEnabled: true;
             trackingMethod: best;"
       renderer="logarithmicDepthBuffer: true; antialias: true;"
       vr-mode-ui="enabled: false"
@@ -25,15 +20,16 @@
       @camera-init="onCameraInit"
       @camera-error="onCameraError"
       @loaded="onSceneLoaded"
+      cursor="rayOrigin: mouse"
+      raycaster="objects: .clickable"
     >
-      <!-- DEBUG: Простая красная плоскость с glitch-effect -->
-      <a-entity id="debug-glitch-plane"
-                geometry="primitive: plane; width: 1; height: 1"
-                material="color: red; side: double; opacity: 0.8"
-                position="0.7 1.3 -3"
-                rotation="180 180 0"
-                glitch-effect="intensity: 1.0; offsetX: 0.7; offsetY: 0.6; radius: 0.5"
-      </a-entity>
+      <!-- Directional light для теней -->
+      <a-entity light="type: directional; castShadow: true; intensity: 0.7; color: #fff" position="2 6 2"></a-entity>
+      <!-- Ambient light для мягкого освещения -->
+      <a-entity light="type: ambient; intensity: 0.4; color: #888"></a-entity>
+
+      <!-- Плоскость-пол, принимающая тени -->
+
       <!-- Ваша gltf-модель -->
       <a-entity
         gltf-model="/models/drage.glb"
@@ -55,9 +51,8 @@
           pinchEnabled: true;
           minScale: 0.3;
           maxScale: 2;"
-      >
-        
-      </a-entity>
+        shadow="cast: false"
+      ></a-entity>
 
       <a-entity camera look-controls>
         <a-entity 
@@ -67,6 +62,17 @@
           material="color: #CCC; shader: flat">
         </a-entity>
       </a-entity>
+
+      <a-assets>
+        <a-asset-item id="model1" src="/models/drage.glb"></a-asset-item>
+      </a-assets>
+      <a-entity
+        id="placed-model"
+        gltf-model="#model1"
+        visible="false"
+        class="clickable"
+        @click="onModelClick"
+      ></a-entity>
     </a-scene>
 
     <!-- Canvas для прямоугольников -->
@@ -83,7 +89,7 @@
     </div>
 
     <!-- Отладочная информация -->
-    <div class="debug-info" v-if="debugInfo">
+    <div class="debug-info" v-if="!debugInfo">
       <p>Статус камеры: {{ debugInfo.cameraStatus }}</p>
       <p>Разрешение: {{ debugInfo.resolution }}</p>
       <p>Ошибки: {{ debugInfo.errors }}</p>
@@ -91,6 +97,7 @@
       <p>Последнее обновление: {{ debugInfo.lastUpdate }}</p>
       <p>Глитч статус: {{ debugInfo.glitchStatus }}</p>
       <p>Статус модели: {{ debugInfo.modelStatus }}</p>
+      <p>Статус coco-ssd: {{ debugInfo.cocoStatus }}</p>
       <div v-if="detectedBoxes.length" class="detected-objects">
         <p>Распознанные объекты:</p>
         <ul>
@@ -100,11 +107,13 @@
         </ul>
       </div>
     </div>
+
+    
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watchEffect, nextTick } from 'vue'
+import { ref, onMounted, watchEffect, nextTick, onBeforeUnmount } from 'vue'
 
 const isSupported = ref(true)
 const marker = ref(null)
@@ -117,7 +126,8 @@ const debugInfo = ref({
   arStatus: 'Инициализация...',
   lastUpdate: new Date().toLocaleTimeString(),
   glitchStatus: 'Инициализация...',
-  modelStatus: 'Модель не загружена'
+  modelStatus: 'Модель не загружена',
+  cocoStatus: 'coco-ssd: не загружена'
 })
 
 const updateDebugInfo = (updates) => {
@@ -244,32 +254,111 @@ onMounted(async () => {
 let cocoModel = null
 const detectedBoxes = ref([]) // массив прямоугольников [x, y, w, h]
 
+// --- Общий canvas и texture для glitch-effect ---
+let sharedCameraCanvas = null
+let sharedCameraCtx = null
+let sharedCameraTexture = null
+let sharedVideo = null
+
+function ensureSharedCameraTexture() {
+  if (!sharedCameraCanvas) {
+    sharedCameraCanvas = document.createElement('canvas');
+    sharedCameraCanvas.width = 320;
+    sharedCameraCanvas.height = 240;
+    sharedCameraCtx = sharedCameraCanvas.getContext('2d', { willReadFrequently: true });
+    sharedCameraTexture = new THREE.Texture(sharedCameraCanvas);
+    sharedCameraTexture.minFilter = THREE.LinearFilter;
+    sharedCameraTexture.magFilter = THREE.LinearFilter;
+    sharedCameraTexture.format = THREE.RGBAFormat;
+    sharedCameraTexture.generateMipmaps = false;
+    sharedVideo = null;
+  }
+}
+
+function updateSharedCameraTexture() {
+  ensureSharedCameraTexture();
+  if (!sharedVideo) {
+    sharedVideo = document.querySelector('video');
+    if (!sharedVideo) return;
+  }
+  if (sharedVideo.readyState === sharedVideo.HAVE_ENOUGH_DATA) {
+    sharedCameraCtx.drawImage(sharedVideo, 0, 0, sharedCameraCanvas.width, sharedCameraCanvas.height);
+    sharedCameraTexture.needsUpdate = true;
+  }
+}
+
 async function loadCocoModel() {
   try {
-    updateDebugInfo({ modelStatus: 'Загрузка модели...' });
-    if (!window.cocoSsd) {
+    updateDebugInfo({ modelStatus: 'Загрузка моделей...', cocoStatus: 'coco-ssd: загрузка...' });
+
+    // tfjs 3.21.0
+    if (!window.tf) {
       await new Promise((resolve, reject) => {
-        const s1 = document.createElement('script');
-        s1.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs';
-        s1.onload = () => {
-          const s2 = document.createElement('script');
-          s2.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
-          s2.onload = resolve;
-          s2.onerror = (e) => reject(new Error('Ошибка загрузки coco-ssd: ' + e.message));
-          document.head.appendChild(s2);
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js';
+        s.onload = resolve;
+        s.onerror = () => { 
+          updateDebugInfo({ errors: 'Ошибка загрузки tfjs' }); 
+          console.error('Ошибка загрузки tfjs');
+          reject(new Error('Ошибка загрузки tfjs')); 
         };
-        s1.onerror = (e) => reject(new Error('Ошибка загрузки tfjs: ' + e.message));
-        document.head.appendChild(s1);
+        document.head.appendChild(s);
       });
     }
-    cocoModel = await window.cocoSsd.load();
+
+    // tfjs-backend-webgl 3.21.0
+    if (!window.tf?.backend || !window.tf.getBackend || window.tf.getBackend() !== 'webgl') {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@3.21.0/dist/tf-backend-webgl.min.js';
+        s.onload = async () => { 
+          try {
+            await window.tf.setBackend('webgl'); 
+            await window.tf.ready(); 
+            resolve(); 
+          } catch (e) {
+            updateDebugInfo({ errors: 'Ошибка инициализации tfjs-backend-webgl' });
+            console.error('Ошибка инициализации tfjs-backend-webgl', e);
+            reject(e);
+          }
+        };
+        s.onerror = () => { 
+          updateDebugInfo({ errors: 'Ошибка загрузки tfjs-backend-webgl' }); 
+          console.error('Ошибка загрузки tfjs-backend-webgl');
+          reject(new Error('Ошибка загрузки tfjs-backend-webgl')); 
+        };
+        document.head.appendChild(s);
+      });
+    }
+
+    // coco-ssd 2.2.2
+    if (!window.cocoSsd) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js';
+        s.onload = resolve;
+        s.onerror = () => { 
+          updateDebugInfo({ errors: 'Ошибка загрузки coco-ssd' }); 
+          console.error('Ошибка загрузки coco-ssd');
+          reject(new Error('Ошибка загрузки coco-ssd')); 
+        };
+        document.head.appendChild(s);
+      });
+    }
+
+    try {
+      cocoModel = await window.cocoSsd.load();
+      updateDebugInfo({ cocoStatus: 'coco-ssd: загружена' });
+    } catch (e) {
+      updateDebugInfo({ cocoStatus: 'coco-ssd: ошибка', errors: 'Ошибка инициализации coco-ssd' });
+      console.error('Ошибка инициализации coco-ssd', e);
+      throw e;
+    }
+
     updateDebugInfo({ modelStatus: 'Модель успешно загружена' });
   } catch (error) {
-    console.error('Ошибка загрузки модели coco-ssd:', error);
-    updateDebugInfo({
-      modelStatus: 'Ошибка загрузки модели',
-      errors: `TensorFlow.js: ${error.message}`
-    });
+    updateDebugInfo({ modelStatus: 'Ошибка загрузки модели', errors: error.message });
+    console.error('Ошибка загрузки модели:', error);
   }
 }
 
@@ -283,16 +372,9 @@ async function detectLoop() {
         class: pred.class,
         score: pred.score
       }));
-      // Для отладки
-      if (predictions.length) {
-        console.log('Predictions:', predictions);
-      }
     }
   } catch (error) {
-    console.error('Ошибка в detectLoop:', error);
-    updateDebugInfo({
-      errors: `detectLoop: ${error.message}`
-    });
+    updateDebugInfo({ errors: error.message });
   }
   requestAnimationFrame(detectLoop);
 }
@@ -311,28 +393,17 @@ AFRAME.registerComponent('glitch-effect', {
   },
 
   init: function () {
-    const el = this.el;
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = 320;
-    this.canvas.height = 240;
-    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
-
-    this.cameraTexture = new THREE.Texture(this.canvas);
-    this.cameraTexture.minFilter = THREE.LinearFilter;
-    this.cameraTexture.magFilter = THREE.LinearFilter;
-    this.cameraTexture.format = THREE.RGBAFormat;
-    this.cameraTexture.generateMipmaps = false;
-
+    // Используем общий canvas/texture
+    ensureSharedCameraTexture();
+    this.cameraTexture = sharedCameraTexture;
     this.noVideo = false;
     this.hasVideo = false;
-
-    // uniforms для bbox
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
         intensity: { value: this.data.intensity },
         cameraTexture: { value: this.cameraTexture },
-        resolution: { value: new THREE.Vector2(this.canvas.width, this.canvas.height) },
+        resolution: { value: new THREE.Vector2(sharedCameraCanvas.width, sharedCameraCanvas.height) },
         radius: { value: this.data.radius },
         center: { value: new THREE.Vector2(0.5, 0.5) },
         hasVideo: { value: 0 },
@@ -376,7 +447,8 @@ AFRAME.registerComponent('glitch-effect', {
               distorted = true;
             }
           }
-          vec3 color = texture2D(cameraTexture, uv).rgb;
+          // Исправленный sampling: переворачиваем по y
+          vec3 color = texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).rgb;
           if (!distorted && hasVideo == 0) {
             // fallback: прозрачный шум вне bbox если нет камеры
             color = vec3(random(uv + time), random(uv + time * 2.0), random(uv + time * 3.0));
@@ -388,56 +460,21 @@ AFRAME.registerComponent('glitch-effect', {
       `,
       transparent: true
     });
-
-    el.addEventListener('loaded', () => {
-      const mesh = el.getObject3D('mesh');
+    this.el.addEventListener('loaded', () => {
+      const mesh = this.el.getObject3D('mesh');
       if (mesh) {
         mesh.material = this.material;
       }
     });
-
-    this.video = null;
-    this.lastUpdate = 0;
-    this.updateInterval = 1000 / 30;
-
-    this.updateCameraTexture = () => {
-      const now = performance.now();
-      if (now - this.lastUpdate < this.updateInterval) return;
-      this.lastUpdate = now;
-      if (!this.video) {
-        this.video = document.querySelector('video');
-        if (!this.video) {
-          this.noVideo = true;
-          this.hasVideo = false;
-          for (let y = 0; y < this.canvas.height; y++) {
-            for (let x = 0; x < this.canvas.width; x++) {
-              const r = Math.floor(Math.random() * 255);
-              const g = Math.floor(Math.random() * 255);
-              const b = Math.floor(Math.random() * 255);
-              this.ctx.fillStyle = `rgb(${r},${g},${b})`;
-              this.ctx.fillRect(x, y, 1, 1);
-            }
-          }
-          this.cameraTexture.needsUpdate = true;
-          return;
-        }
-      }
-      if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
-        this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-        this.cameraTexture.needsUpdate = true;
-        this.noVideo = false;
-        this.hasVideo = true;
-      } else {
-        this.hasVideo = false;
-      }
-    };
   },
 
   tick: function (time) {
+    // Обновляем общий canvas/texture
+    updateSharedCameraTexture();
     if (this.material) {
       this.material.uniforms.time.value = time / 1000;
       this.material.uniforms.intensity.value = this.data.intensity;
-      this.material.uniforms.hasVideo.value = this.hasVideo ? 1 : 0;
+      this.material.uniforms.hasVideo.value = sharedVideo && sharedVideo.readyState === 4 ? 1 : 0;
       // --- Передача bbox из detectedBoxes ---
       const boxes = (window.__vueDetectedBoxes || []);
       this.material.uniforms.boxCount.value = Math.min(boxes.length, 10);
@@ -446,16 +483,15 @@ AFRAME.registerComponent('glitch-effect', {
           const bbox = boxes[i].bbox || [0, 0, 0, 0];
           const [x, y, w, h] = bbox;
           this.material.uniforms.boxes.value[i] = new THREE.Vector4(
-            x / this.canvas.width,
-            y / this.canvas.height,
-            w / this.canvas.width,
-            h / this.canvas.height
+            x / 1280,
+            y / 720,
+            w / 1280,
+            h / 720
           );
         } else {
           this.material.uniforms.boxes.value[i] = new THREE.Vector4(0,0,0,0);
         }
       }
-      this.updateCameraTexture();
     }
   },
 
@@ -481,37 +517,102 @@ watchEffect(() => {
 });
 
 const overlayCanvas = ref(null)
+let lastRect = null
+let glitchTime = 0;
+let glitchAnimFrame = null;
 
-// Функция для отрисовки bbox
-function drawOverlay() {
+// Кэшируем параметры полос для каждого bbox на несколько кадров вперёд
+let glitchCache = {};
+
+function syncOverlayCanvas() {
   const canvas = overlayCanvas.value
   const aframeCanvas = document.querySelector('a-scene canvas')
   if (!canvas || !aframeCanvas) return
-  // Получаем положение и размер основного канваса A-Frame
   const rect = aframeCanvas.getBoundingClientRect()
-  // Синхронизируем overlay-canvas
-  canvas.style.position = 'absolute'
+  lastRect = rect
+  canvas.style.position = 'fixed'
   canvas.style.left = rect.left + 'px'
   canvas.style.top = rect.top + 'px'
   canvas.width = rect.width
   canvas.height = rect.height
   canvas.style.width = rect.width + 'px'
   canvas.style.height = rect.height + 'px'
-  // pointer-events: none уже в стилях
-  const ctx = canvas.getContext('2d')
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  const scaleX = canvas.width / 1280
-  const scaleY = canvas.height / 720
-  detectedBoxes.value.forEach(box => {
-    const [x, y, w, h] = box.bbox
-    ctx.strokeStyle = '#00FF00'
-    ctx.lineWidth = 3
-    ctx.strokeRect(x * scaleX, y * scaleY, w * scaleX, h * scaleY)
-    ctx.font = '18px Arial'
-    ctx.fillStyle = '#00FF00'
-    ctx.fillText(`${box.class} (${(box.score * 100).toFixed(1)}%)`, x * scaleX + 4, y * scaleY + 20)
-  })
+  canvas.style.pointerEvents = 'none'
+  canvas.style.zIndex = 1000
 }
+
+function drawOverlay() {
+  syncOverlayCanvas();
+  const canvas = overlayCanvas.value;
+  if (!canvas || !lastRect) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const scaleX = canvas.width / 1280;
+  const scaleY = canvas.height / 720;
+  const video = document.querySelector('video');
+  const t = glitchTime / 1000;
+
+  detectedBoxes.value.slice(0, 1).forEach((box, boxIdx) => { // максимум 1 объект
+    const [x, y, w, h] = box.bbox;
+    if (video && video.readyState === 4) {
+      for (let i = 0; i < h; i += 3) {
+        const lineY = y + i;
+        const lineHeight = 3;
+        // Случайный сдвиг полосы
+        const offset = (Math.random() - 0.5) * 40; // -20..+20 px
+        // Иногда делаем RGB split
+        if (i % 12 === 0) {
+          // Красный канал
+          ctx.globalAlpha = 0.7;
+          ctx.drawImage(
+            video,
+            x, lineY, w, lineHeight,
+            (x + offset + 8) * scaleX, lineY * scaleY, w * scaleX, lineHeight * scaleY
+          );
+          // Зелёный канал
+          ctx.globalAlpha = 0.7;
+          ctx.drawImage(
+            video,
+            x, lineY, w, lineHeight,
+            (x + offset - 8) * scaleX, lineY * scaleY, w * scaleX, lineHeight * scaleY
+          );
+          // Синий канал
+          ctx.globalAlpha = 0.7;
+          ctx.drawImage(
+            video,
+            x, lineY, w, lineHeight,
+            (x + offset) * scaleX, lineY * scaleY, w * scaleX, lineHeight * scaleY
+          );
+        } else {
+          // Обычная смазанная полоса
+          ctx.globalAlpha = 0.8;
+          ctx.drawImage(
+            video,
+            x, lineY, w, lineHeight,
+            (x + offset) * scaleX, lineY * scaleY, w * scaleX, lineHeight * scaleY
+          );
+        }
+      }
+      ctx.globalAlpha = 1.0;
+    }
+  });
+}
+
+function glitchOverlayLoop() {
+  glitchTime = performance.now();
+  drawOverlay();
+  glitchAnimFrame = requestAnimationFrame(glitchOverlayLoop);
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  setTimeout(drawOverlay, 1000) // на случай, если canvas появляется с задержкой
+  glitchOverlayLoop();
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  if (glitchAnimFrame) cancelAnimationFrame(glitchAnimFrame);
+})
 
 // Следим за изменениями bbox и обновляем canvas
 watchEffect(() => {
@@ -519,6 +620,17 @@ watchEffect(() => {
     drawOverlay()
   })
 })
+
+// Синхронизируем overlay-canvas при изменении размера окна
+function handleResize() {
+  drawOverlay()
+}
+
+const isWebXRSupported = ref(true);
+
+function onModelClick(evt) {
+  alert('3D-объект нажат!');
+}
 
 </script>
 
