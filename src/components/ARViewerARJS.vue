@@ -286,7 +286,7 @@ function updateSharedCameraTexture() {
     sharedCameraTexture.needsUpdate = true;
   }
 }
-/*
+
 async function loadCocoModel() {
   try {
     updateDebugInfo({ modelStatus: 'Загрузка моделей...', cocoStatus: 'coco-ssd: загрузка...' });
@@ -361,7 +361,7 @@ async function loadCocoModel() {
     console.error('Ошибка загрузки модели:', error);
   }
 }
-*/
+
 async function detectLoop() {
   try {
     const video = document.querySelector('video');
