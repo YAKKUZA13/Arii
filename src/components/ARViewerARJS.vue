@@ -59,6 +59,8 @@
       <a-entity light="type: directional; castShadow: true; intensity: 0.7; color: #fff" position="2 6 2"></a-entity>
       <!-- Ambient light для мягкого освещения -->
       <a-entity light="type: ambient; intensity: 0.4; color: #888"></a-entity>
+      <!-- 3D ленты из bbox -->
+      <a-entity ribbons-effect></a-entity>
 
       <!-- Плоскость-пол, принимающая тени -->
 
@@ -1392,6 +1394,50 @@ function onModelLoaded(evt) {
     }, 100);
   }
 }
+
+// --- ribbons-effect: 3D ленты из bbox ---
+AFRAME.registerComponent('ribbons-effect', {
+  schema: {},
+  init: function () {
+    this.ribbonMesh = null;
+    this.lastBBox = '';
+  },
+  tick: function () {
+    const boxes = window.__vueDetectedBoxes || [];
+    const video = document.querySelector('video');
+    if (boxes.length && video && video.readyState === 4) {
+      const bboxStr = boxes[0].bbox.toString();
+      if (!this.ribbonMesh || this.lastBBox !== bboxStr) {
+        if (this.ribbonMesh) {
+          this.el.sceneEl.object3D.remove(this.ribbonMesh);
+          this.ribbonMesh.geometry.dispose();
+          if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
+          this.ribbonMesh.material.dispose();
+        }
+        import('./ar-ribbons.js').then(({ createRibbonFromBBox }) => {
+          this.ribbonMesh = createRibbonFromBBox(boxes[0].bbox, video, this.el.sceneEl.object3D);
+          this.lastBBox = bboxStr;
+        });
+      }
+    } else if (this.ribbonMesh) {
+      this.el.sceneEl.object3D.remove(this.ribbonMesh);
+      this.ribbonMesh.geometry.dispose();
+      if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
+      this.ribbonMesh.material.dispose();
+      this.ribbonMesh = null;
+      this.lastBBox = '';
+    }
+  },
+  remove: function () {
+    if (this.ribbonMesh) {
+      this.el.sceneEl.object3D.remove(this.ribbonMesh);
+      this.ribbonMesh.geometry.dispose();
+      if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
+      this.ribbonMesh.material.dispose();
+      this.ribbonMesh = null;
+    }
+  }
+});
 
 </script>
 
