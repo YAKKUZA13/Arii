@@ -68,7 +68,7 @@
       <a-entity
         gltf-model="/models/drage.glb"
         scale="0.5 0.5 0.5"
-        position="0 0 -3"
+        position="0 0 -4"
         rotation="0 90 0"
         shadow="cast: false; receive: false"
         animation="property: rotation; to: 0 450 0; loop: true; dur: 10000;"
@@ -459,6 +459,14 @@ AFRAME.registerComponent('glitch-effect', {
     this.cameraTexture = sharedCameraTexture;
     this.noVideo = false;
     this.hasVideo = false;
+    
+    // Проверяем, является ли устройство мобильным
+    this.isMobile = window.innerWidth < 768;
+    
+    // Добавляем обработчик изменения размера окна
+    this.handleResize = this.handleResize.bind(this);
+    window.addEventListener('resize', this.handleResize);
+    
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
@@ -469,7 +477,8 @@ AFRAME.registerComponent('glitch-effect', {
         center: { value: new THREE.Vector2(0.5, 0.5) },
         hasVideo: { value: 0 },
         boxCount: { value: 0 },
-        boxes: { value: Array(10).fill(new THREE.Vector4(0,0,0,0)) }
+        boxes: { value: Array(10).fill(new THREE.Vector4(0,0,0,0)) },
+        isMobile: { value: this.isMobile ? 1 : 0 }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -494,6 +503,7 @@ AFRAME.registerComponent('glitch-effect', {
         uniform int hasVideo;
         uniform int boxCount;
         uniform vec4 boxes[10]; // x, y, w, h
+        uniform int isMobile; // 1 для мобильных устройств
         varying vec2 vUv;
         varying vec3 vNormal;
         varying vec3 vViewPosition;
@@ -519,31 +529,50 @@ AFRAME.registerComponent('glitch-effect', {
         
         // Функция для создания эффекта голограммы
         vec3 hologramEffect(vec2 uv, vec3 color) {
-          // Создаем линии как у голограммы
-          float scanline = sin(uv.y * 100.0 + time * 5.0) * 0.03 + 0.03;
+          // Настраиваем интенсивность эффектов в зависимости от устройства
+          float deviceFactor = isMobile == 1 ? 0.7 : 1.0;
           
-          // Создаем шумы и помехи
-          float noise1 = noise(uv * 100.0 + time) * 0.1;
-          float noise2 = noise(uv * 50.0 - time * 0.5) * 0.1;
+          // Создаем линии как у голограммы - меньше линий для мобильных
+          float scanlineFreq = isMobile == 1 ? 50.0 : 100.0;
+          float scanline = sin(uv.y * scanlineFreq + time * 5.0) * 0.03 * deviceFactor + 0.03;
+          
+          // Создаем шумы и помехи - упрощаем для мобильных
+          float noiseFreq1 = isMobile == 1 ? 50.0 : 100.0;
+          float noiseFreq2 = isMobile == 1 ? 25.0 : 50.0;
+          float noiseIntensity = isMobile == 1 ? 0.07 : 0.1;
+          float noise1 = noise(uv * noiseFreq1 + time) * noiseIntensity;
+          float noise2 = noise(uv * noiseFreq2 - time * 0.5) * noiseIntensity;
           
           // Смещение по горизонтали для glitch-эффекта
-          float glitchX = step(0.98, sin(time * 9.0 + uv.y * 50.0)) * 0.02 * sin(time * 4.0);
+          float glitchX = step(0.98, sin(time * 9.0 + uv.y * 50.0)) * 0.02 * sin(time * 4.0) * deviceFactor;
           
           // Искажаем UV координаты для создания объемного эффекта
           vec2 offset = vec2(
             noise1 * 0.02 + glitchX,
             noise2 * 0.01
-          );
+          ) * deviceFactor;
           
           // Добавляем RGB-смещение для хроматической аберрации
-          vec3 rgbOffset = vec3(
-            texture2D(cameraTexture, vec2(uv.x + offset.x * 1.4, 1.0 - (uv.y + offset.y))).r,
-            texture2D(cameraTexture, vec2(uv.x + offset.x * 0.5, 1.0 - (uv.y - offset.y * 0.5))).g,
-            texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).b
-          );
+          float rgbOffset = isMobile == 1 ? 0.7 : 1.0;
+          vec3 rgbOffsetColor;
+          
+          if (isMobile == 1) {
+            // Упрощенный вариант для мобильных
+            rgbOffsetColor = vec3(
+              texture2D(cameraTexture, vec2(uv.x + offset.x, 1.0 - (uv.y + offset.y))).r,
+              texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).g,
+              texture2D(cameraTexture, vec2(uv.x - offset.x, 1.0 - (uv.y - offset.y))).b
+            );
+          } else {
+            rgbOffsetColor = vec3(
+              texture2D(cameraTexture, vec2(uv.x + offset.x * 1.4, 1.0 - (uv.y + offset.y))).r,
+              texture2D(cameraTexture, vec2(uv.x + offset.x * 0.5, 1.0 - (uv.y - offset.y * 0.5))).g,
+              texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).b
+            );
+          }
           
           // Добавляем эффект голограммы
-          vec3 hologram = rgbOffset + vec3(0.1, 0.3, 0.6) * scanline + vec3(noise1 + noise2);
+          vec3 hologram = rgbOffsetColor + vec3(0.1, 0.3, 0.6) * scanline + vec3(noise1 + noise2);
           
           // Добавляем эффект границ голограммы
           float edge = (1.0 - abs(vNormal.z)) * 0.3;
@@ -565,7 +594,11 @@ AFRAME.registerComponent('glitch-effect', {
             if (inBox(uv, boxes[i])) {
               // Эффект 3D-пространственного искажения
               float distDepth = sin(vViewPosition.z * 0.1 + time) * 0.1;
-              float distortionAmount = 0.05 * sin(time * 3.0 + uv.y * 20.0);
+              
+              // Уменьшаем искажение для мобильных устройств
+              float deviceFactor = isMobile == 1 ? 0.5 : 1.0;
+              
+              float distortionAmount = 0.05 * sin(time * 3.0 + uv.y * 20.0) * deviceFactor;
               
               // Имитация объемности через искажение UV
               uv.x += distortionAmount * sin(uv.y * 40.0 + time * 2.0 + distDepth);
@@ -598,7 +631,9 @@ AFRAME.registerComponent('glitch-effect', {
               color += vec3(0.0, 0.5, 1.0) * sin(time * 10.0) * 0.3;
             }
             
-            gl_FragColor = vec4(color, 0.85 + sin(time * 3.0) * 0.15);
+            // Корректируем прозрачность для мобильных
+            float alpha = isMobile == 1 ? (0.75 + sin(time * 3.0) * 0.15) : (0.85 + sin(time * 3.0) * 0.15);
+            gl_FragColor = vec4(color, alpha);
           } else if (hasVideo == 0) {
             // Полностью прозрачный вне области эффекта
             gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
@@ -616,6 +651,14 @@ AFRAME.registerComponent('glitch-effect', {
         mesh.material = this.material;
       }
     });
+  },
+
+  handleResize: function() {
+    // Обновляем флаг мобильного устройства при изменении размера окна
+    this.isMobile = window.innerWidth < 768;
+    if (this.material) {
+      this.material.uniforms.isMobile.value = this.isMobile ? 1 : 0;
+    }
   },
 
   tick: function (time) {
@@ -638,8 +681,14 @@ AFRAME.registerComponent('glitch-effect', {
           x += widthReduction; // смещаем влево на 5% от ширины
           w -= widthReduction * 2; // уменьшаем ширину на 10% (5% слева + 5% справа)
           
-          // Дополнительно сдвигаем влево на 50px + 70px = 120px
-          x -= 120;
+          // Корректировка смещения в зависимости от устройства
+          if (this.isMobile) {
+            // На мобильных устройствах меньшее смещение
+            x -= 30;
+          } else {
+            // На десктопе оставляем прежнее смещение
+            x -= 120;
+          }
           
           this.material.uniforms.boxes.value[i] = new THREE.Vector4(
             x / 1280,
@@ -666,13 +715,16 @@ AFRAME.registerComponent('glitch-effect', {
       this.canvas.height = 0;
     }
     this.video = null;
+    window.removeEventListener('resize', this.handleResize);
   }
 });
 
 // --- Синхронизация detectedBoxes для glitch-effect ---
 window.__vueDetectedBoxes = [];
 watchEffect(() => {
-  window.__vueDetectedBoxes = detectedBoxes.value;
+  // Берем только первый распознанный объект
+  const firstObject = detectedBoxes.value.length > 0 ? [detectedBoxes.value[0]] : [];
+  window.__vueDetectedBoxes = firstObject;
 });
 
 // Компонент для установки высокого порядка отрисовки
@@ -764,11 +816,22 @@ function syncHologramFrame() {
   
   let [x, y, w, h] = box.bbox;
   
+  // Определяем, находимся ли мы на мобильном устройстве
+  const isMobile = window.innerWidth < 768;
+  
   // Применяем те же преобразования, что и к эффекту глюка
   const widthReduction = w * 0.05;
   x += widthReduction;
   w -= widthReduction * 2;
-  x -= 120;
+  
+  // Корректировка смещения в зависимости от устройства
+  if (isMobile) {
+    // На мобильных устройствах меньшее смещение
+    x -= 30;
+  } else {
+    // На десктопе оставляем прежнее смещение
+    x -= 120;
+  }
   
   // Добавляем 3D эффект через CSS трансформации
   const t = glitchTime / 1000;
@@ -782,10 +845,11 @@ function syncHologramFrame() {
   frame.style.width = (w * scaleX + 20) + 'px';
   frame.style.height = (h * scaleY + 20) + 'px';
   
-  // Применяем трансформации для эффекта 3D
-  const rotX = 2 + Math.sin(t * 0.5) * 1;
-  const rotY = -2 + Math.cos(t * 0.7) * 1;
-  const transZ = Math.sin(t * 0.3) * 5;
+  // Адаптивные трансформации для эффекта 3D
+  const rotationFactor = isMobile ? 0.5 : 1; // Уменьшаем вращение на мобильных устройствах
+  const rotX = 2 + Math.sin(t * 0.5) * 1 * rotationFactor;
+  const rotY = -2 + Math.cos(t * 0.7) * 1 * rotationFactor;
+  const transZ = Math.sin(t * 0.3) * 5 * rotationFactor;
   
   frame.style.transform = `
     perspective(800px) 
@@ -988,6 +1052,9 @@ function drawOverlay() {
   const scaleY = canvas.height / 720;
   const video = document.querySelector('video');
   const t = glitchTime / 1000;
+  
+  // Определяем, находимся ли мы на мобильном устройстве
+  const isMobile = window.innerWidth < 768;
 
   detectedBoxes.value.forEach((box, boxIdx) => { // максимум 1 объект
     // Получаем исходные координаты и размеры
@@ -995,11 +1062,17 @@ function drawOverlay() {
     
     // Уменьшаем ширину на 5% слева и 5% справа
     const widthReduction = w * 0.05;
-    x += widthReduction; // смещаем влево на 5% от ширины
-    w -= widthReduction * 2; // уменьшаем ширину на 10% (5% слева + 5% справа)
+   // x += widthReduction; // смещаем влево на 5% от ширины
+   // w -= widthReduction * 2; // уменьшаем ширину на 10% (5% слева + 5% справа)
     
-    // Дополнительно сдвигаем влево на 50px + 70px = 120px
-    x -= 120;
+    // Корректировка смещения в зависимости от устройства
+    if (isMobile) {
+      // На мобильных устройствах меньшее смещение
+      x += 330;
+    } else {
+      // На десктопе оставляем прежнее смещение
+      x -= 120;
+    }
     
     if (video && video.readyState === 4) {
       // Добавляем пространственность через неравномерную деформацию
@@ -1022,30 +1095,31 @@ function drawOverlay() {
       const centerX = x + w/2;
       const centerY = y + h/2;
       
-      // Получаем глубину параллелепипеда
-      const depth = 40 + 10 * Math.sin(t * 0.8);
+      // Получаем глубину параллелепипеда - адаптивная для мобильных
+      const depthFactor = isMobile ? 0.6 : 1;
+      const depth = (40 + 10 * Math.sin(t * 0.8)) * depthFactor;
       
       // Рисуем линии с переменной высотой для эффекта объема на передней грани
-      drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, centerX, centerY, 'front');
+      drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, centerX, centerY, 'front', isMobile);
       
       // Рисуем эффекты на левой грани
       const leftX = x - depth * 0.7;
-      drawGlitchOnFace(ctx, video, leftX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'left');
+      drawGlitchOnFace(ctx, video, leftX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'left', isMobile);
       
       // Рисуем эффекты на правой грани
       const rightX = x + w;
-      drawGlitchOnFace(ctx, video, rightX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'right');
+      drawGlitchOnFace(ctx, video, rightX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'right', isMobile);
       
       // Рисуем эффекты на верхней грани
       const topY = y - depth * 0.4;
-      drawGlitchOnFace(ctx, video, x, topY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'top');
+      drawGlitchOnFace(ctx, video, x, topY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'top', isMobile);
       
       // Рисуем эффекты на нижней грани
       const bottomY = y + h;
-      drawGlitchOnFace(ctx, video, x, bottomY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'bottom');
+      drawGlitchOnFace(ctx, video, x, bottomY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'bottom', isMobile);
       
       // Добавляем мерцающие частицы для эффекта голограммы
-      drawHolographicParticles(ctx, x, y, w, h, depth, t, scaleX, scaleY);
+      drawHolographicParticles(ctx, x, y, w, h, depth, t, scaleX, scaleY, isMobile);
       
       // Восстанавливаем контекст
       ctx.restore();
@@ -1055,23 +1129,29 @@ function drawOverlay() {
 }
 
 // Функция для рисования эффекта глюка на указанной грани
-function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY, centerX, centerY, face) {
+function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY, centerX, centerY, face, isMobile = false) {
   const t = time;
   
+  // Настраиваем интенсивность эффектов в зависимости от устройства
+  const deviceFactor = isMobile ? 0.7 : 1;
+  
   const faceIntensity = {
-    'front': 1.0,
-    'left': 0.7,
-    'right': 0.7,
-    'top': 0.6,
-    'bottom': 0.6,
-    'back': 0.5
+    'front': 1.0 * deviceFactor,
+    'left': 0.7 * deviceFactor,
+    'right': 0.7 * deviceFactor,
+    'top': 0.6 * deviceFactor,
+    'bottom': 0.6 * deviceFactor,
+    'back': 0.5 * deviceFactor
   };
   
-  const intensity = faceIntensity[face] || 0.5;
+  const intensity = faceIntensity[face] || 0.5 * deviceFactor;
   
   // Для боковых граней используем другие шаблоны искажения
   let distortionFunction;
   let rgbSplitIntensity;
+  
+  // Адаптивный шаг для строк эффекта
+  const lineStep = isMobile ? 5 : 3; // Увеличиваем шаг на мобильных для оптимизации
   
   switch(face) {
     case 'left':
@@ -1116,15 +1196,18 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
   }
   
   // Рисуем линии с искажениями
-  for (let i = 0; i < height; i += 3) {
+  for (let i = 0; i < height; i += lineStep) {
     const lineY = y + i;
-    const lineHeight = 3;
+    const lineHeight = lineStep;
     
     // Получаем параметры искажения для текущей линии
     const distortion = distortionFunction(i, lineY);
     
+    // Пропускаем некоторые строки для оптимизации на мобильных
+    if (isMobile && i % 10 !== 0 && face !== 'front') continue;
+    
     // Иногда делаем RGB split для эффекта голограммы
-    if (i % 12 === 0) {
+    if (i % (isMobile ? 24 : 12) === 0) {
       // Красный канал
       ctx.globalAlpha = distortion.alpha * 0.7;
       ctx.drawImage(
@@ -1167,15 +1250,19 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
 }
 
 // Функция для рисования голографических частиц
-function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) {
+function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, isMobile = false) {
   const t = time;
+  
+  // Адаптивное количество частиц в зависимости от устройства
+  const particleFactor = isMobile ? 0.5 : 1;
+  
   // Основные частицы на передней грани
-  const frontParticleCount = 20;
+  const frontParticleCount = Math.floor(20 * particleFactor);
   for (let i = 0; i < frontParticleCount; i++) {
     const particleX = x + Math.random() * w;
     const particleY = y + Math.random() * h;
-    const particleSize = 1 + Math.random() * 2;
-    const particleAlpha = 0.2 + 0.8 * Math.random();
+    const particleSize = 1 + Math.random() * 2 * particleFactor;
+    const particleAlpha = 0.2 + 0.8 * Math.random() * particleFactor;
     
     ctx.fillStyle = `rgba(120, 220, 255, ${particleAlpha})`;
     ctx.beginPath();
@@ -1184,7 +1271,7 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) 
   }
   
   // Частицы на боковых гранях
-  const sideParticleCount = 10;
+  const sideParticleCount = Math.floor(10 * particleFactor);
   const leftX = x - depth * 0.7;
   const rightX = x + w;
   
@@ -1192,8 +1279,8 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) 
     // Левая грань
     const leftParticleX = leftX + Math.random() * depth * 0.7;
     const leftParticleY = y + Math.random() * h;
-    const leftParticleSize = 0.5 + Math.random() * 1.5;
-    const leftParticleAlpha = 0.1 + 0.4 * Math.random();
+    const leftParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
+    const leftParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
     ctx.fillStyle = `rgba(100, 200, 255, ${leftParticleAlpha})`;
     ctx.beginPath();
@@ -1203,8 +1290,8 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) 
     // Правая грань
     const rightParticleX = rightX + Math.random() * depth * 0.7;
     const rightParticleY = y + Math.random() * h;
-    const rightParticleSize = 0.5 + Math.random() * 1.5;
-    const rightParticleAlpha = 0.1 + 0.4 * Math.random();
+    const rightParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
+    const rightParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
     ctx.fillStyle = `rgba(100, 200, 255, ${rightParticleAlpha})`;
     ctx.beginPath();
@@ -1220,8 +1307,8 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) 
     // Верхняя грань
     const topParticleX = x + Math.random() * w;
     const topParticleY = topY + Math.random() * depth * 0.4;
-    const topParticleSize = 0.5 + Math.random() * 1.5;
-    const topParticleAlpha = 0.1 + 0.4 * Math.random();
+    const topParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
+    const topParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
     ctx.fillStyle = `rgba(100, 200, 255, ${topParticleAlpha})`;
     ctx.beginPath();
@@ -1231,8 +1318,8 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY) 
     // Нижняя грань
     const bottomParticleX = x + Math.random() * w;
     const bottomParticleY = bottomY + Math.random() * depth * 0.4;
-    const bottomParticleSize = 0.5 + Math.random() * 1.5;
-    const bottomParticleAlpha = 0.1 + 0.4 * Math.random();
+    const bottomParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
+    const bottomParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
     ctx.fillStyle = `rgba(100, 200, 255, ${bottomParticleAlpha})`;
     ctx.beginPath();
@@ -1355,6 +1442,56 @@ function onModelLoaded(evt) {
   overflow: visible; /* Изменяем на visible, чтобы видеть все грани */
 }
 
+/* Адаптивные стили для мобильных устройств */
+@media (max-width: 767px) {
+  .hologram-frame {
+    border-width: 1px;
+    box-shadow: 0 0 5px rgba(0, 195, 255, 0.7), inset 0 0 10px rgba(0, 195, 255, 0.4);
+  }
+  
+  .corner-line {
+    width: 30px;
+    height: 30px;
+  }
+  
+  .corner-line.top-left {
+    top: -15px;
+    left: -15px;
+  }
+  
+  .corner-line.top-right {
+    top: -15px;
+    right: -15px;
+  }
+  
+  .corner-line.bottom-left {
+    bottom: -15px;
+    left: -15px;
+  }
+  
+  .corner-line.bottom-right {
+    bottom: -15px;
+    right: -15px;
+  }
+  
+  .connector-line {
+    width: 1px;
+    height: 30px;
+  }
+  
+  .side-face {
+    border-width: 1px;
+  }
+  
+  .left-face, .right-face {
+    width: 30px;
+  }
+  
+  .top-face, .bottom-face {
+    height: 30px;
+  }
+}
+
 .hologram-frame::before,
 .hologram-frame::after {
   content: '';
@@ -1392,6 +1529,13 @@ function onModelLoaded(evt) {
   opacity: 0.7;
 }
 
+@media (max-width: 767px) {
+  .scan-line {
+    height: 1px;
+    box-shadow: 0 0 4px rgba(0, 195, 255, 0.6);
+  }
+}
+
 /* Сетка голограммы */
 .holo-grid {
   position: absolute;
@@ -1405,6 +1549,12 @@ function onModelLoaded(evt) {
   background-size: 20px 20px;
   opacity: 0.5;
   animation: gridPulse 4s infinite alternate ease-in-out;
+}
+
+@media (max-width: 767px) {
+  .holo-grid {
+    background-size: 15px 15px;
+  }
 }
 
 /* Соединительные линии для параллелепипеда */
@@ -1680,6 +1830,7 @@ function onModelLoaded(evt) {
   margin: 5px 0;
 }
 
+/* Адаптивность для overlay-canvas */
 .overlay-canvas {
   position: absolute;
   top: 0;
@@ -1688,5 +1839,14 @@ function onModelLoaded(evt) {
   height: 100% !important;
   pointer-events: none;
   z-index: 3; /* Уменьшаем z-index canvas, чтобы он был ниже сцены */
+}
+
+@media (max-width: 767px) {
+  /* Убираем отладочную информацию на мобильных устройствах */
+  .debug-info {
+    font-size: 10px;
+    max-width: 50%;
+    opacity: 0.7;
+  }
 }
 </style> 
