@@ -56,11 +56,11 @@
       raycaster="objects: .clickable"
     >
       <!-- Directional light для теней -->
-      <a-entity light="type: directional; castShadow: true; intensity: 0.7; color: #fff" position="2 6 2"></a-entity>
+      <a-entity light="type: directional; castShadow: true; intensity: 0.7; color: #8CFF00" position="2 6 2"></a-entity>
       <!-- Ambient light для мягкого освещения -->
-      <a-entity light="type: ambient; intensity: 0.4; color: #888"></a-entity>
+      <a-entity light="type: ambient; intensity: 0.4; color: #8CFF00"></a-entity>
       <!-- 3D ленты из bbox -->
-      <a-entity ribbons-effect></a-entity>
+      <!-- <a-entity ribbons-effect></a-entity> -->
 
       <!-- Плоскость-пол, принимающая тени -->
 
@@ -104,12 +104,12 @@
       ></a-entity>
 
       <a-entity camera look-controls>
-        <a-entity 
+        <!--<a-entity 
           cursor="rayOrigin: mouse; fuse: false"
           position="0 0 -1"
           geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
-          material="color: #CCC; shader: flat">
-        </a-entity>
+          material="color: #8CFF00; shader: flat">
+        </a-entity>-->
       </a-entity>
     </a-scene>
 
@@ -514,52 +514,34 @@ AFRAME.registerComponent('glitch-effect', {
           return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
         }
         
-        // Шум Перлина для создания волнистого эффекта
         float noise(vec2 st) {
           vec2 i = floor(st);
           vec2 f = fract(st);
-          
           float a = random(i);
           float b = random(i + vec2(1.0, 0.0));
           float c = random(i + vec2(0.0, 1.0));
           float d = random(i + vec2(1.0, 1.0));
-          
           vec2 u = f * f * (3.0 - 2.0 * f);
-          
           return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
         }
         
-        // Функция для создания эффекта голограммы
         vec3 hologramEffect(vec2 uv, vec3 color) {
-          // Настраиваем интенсивность эффектов в зависимости от устройства
           float deviceFactor = isMobile == 1 ? 0.7 : 1.0;
-          
-          // Создаем линии как у голограммы - меньше линий для мобильных
           float scanlineFreq = isMobile == 1 ? 50.0 : 100.0;
           float scanline = sin(uv.y * scanlineFreq + time * 5.0) * 0.03 * deviceFactor + 0.03;
-          
-          // Создаем шумы и помехи - упрощаем для мобильных
           float noiseFreq1 = isMobile == 1 ? 50.0 : 100.0;
           float noiseFreq2 = isMobile == 1 ? 25.0 : 50.0;
           float noiseIntensity = isMobile == 1 ? 0.07 : 0.1;
           float noise1 = noise(uv * noiseFreq1 + time) * noiseIntensity;
           float noise2 = noise(uv * noiseFreq2 - time * 0.5) * noiseIntensity;
-          
-          // Смещение по горизонтали для glitch-эффекта
           float glitchX = step(0.98, sin(time * 9.0 + uv.y * 50.0)) * 0.02 * sin(time * 4.0) * deviceFactor;
-          
-          // Искажаем UV координаты для создания объемного эффекта
           vec2 offset = vec2(
             noise1 * 0.02 + glitchX,
             noise2 * 0.01
           ) * deviceFactor;
-          
-          // Добавляем RGB-смещение для хроматической аберрации
           float rgbOffset = isMobile == 1 ? 0.7 : 1.0;
           vec3 rgbOffsetColor;
-          
           if (isMobile == 1) {
-            // Упрощенный вариант для мобильных
             rgbOffsetColor = vec3(
               texture2D(cameraTexture, vec2(uv.x + offset.x, 1.0 - (uv.y + offset.y))).r,
               texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).g,
@@ -572,14 +554,9 @@ AFRAME.registerComponent('glitch-effect', {
               texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).b
             );
           }
-          
-          // Добавляем эффект голограммы
           vec3 hologram = rgbOffsetColor + vec3(0.1, 0.3, 0.6) * scanline + vec3(noise1 + noise2);
-          
-          // Добавляем эффект границ голограммы
           float edge = (1.0 - abs(vNormal.z)) * 0.3;
           hologram += vec3(0.0, 0.5, 1.0) * edge * (sin(time * 2.0) * 0.2 + 0.3);
-          
           return hologram;
         }
         
@@ -590,57 +567,45 @@ AFRAME.registerComponent('glitch-effect', {
         void main() {
           vec2 uv = vUv;
           bool distorted = false;
-          
+          float glitchLine = 0.0;
+          float glitchAlpha = 1.0;
+          float glitchRGB = 0.0;
+          vec3 color = vec3(0.0);
           for (int i = 0; i < 10; i++) {
             if (i >= boxCount) break;
             if (inBox(uv, boxes[i])) {
-              // Эффект 3D-пространственного искажения
-              float distDepth = sin(vViewPosition.z * 0.1 + time) * 0.1;
-              
-              // Уменьшаем искажение для мобильных устройств
-              float deviceFactor = isMobile == 1 ? 0.5 : 1.0;
-              
-              float distortionAmount = 0.05 * sin(time * 3.0 + uv.y * 20.0) * deviceFactor;
-              
-              // Имитация объемности через искажение UV
-              uv.x += distortionAmount * sin(uv.y * 40.0 + time * 2.0 + distDepth);
-              uv.y += distortionAmount * 0.7 * cos(uv.x * 40.0 + time * 2.0 - distDepth);
-              
-              // Вычисляем глубину для эффекта объема
-              float depth = noise(uv * 5.0 + time * 0.2) * 0.1 + 0.9;
-              
+              // --- ГОРИЗОНТАЛЬНЫЕ РАЗРЫВЫ ---
+              float lineRand = random(vec2(uv.y * 100.0, time * 0.5));
+              if (lineRand > 0.7) {
+                uv.x += (lineRand - 0.7) * 0.2 * sin(time * 2.0 + uv.y * 100.0);
+                glitchLine = 1.0;
+              }
+              // --- ПРОЗРАЧНЫЕ ПОЛОСЫ ---
+              float alphaRand = random(vec2(uv.y * 200.0, time));
+              if (alphaRand > 0.85) {
+                glitchAlpha = 0.0;
+              }
+              // --- RGB-сдвиг ---
+              float rgbRand = random(vec2(uv.y * 300.0, time * 0.7));
+              if (rgbRand > 0.6) {
+                glitchRGB = (rgbRand - 0.6) * 0.03;
+              }
+              // --- Цветовой шум ---
+              float colorNoise = (random(uv * 200.0 + time * 2.0) - 0.5) * 0.2;
+              // --- Применяем искажения ---
+              vec3 baseColor = vec3(
+                texture2D(cameraTexture, vec2(uv.x + glitchRGB, 1.0 - uv.y)).r + colorNoise,
+                texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).g + colorNoise,
+                texture2D(cameraTexture, vec2(uv.x - glitchRGB, 1.0 - uv.y)).b + colorNoise
+              );
+              color = hologramEffect(uv, baseColor);
               distorted = true;
             }
           }
-          
-          // Применяем голографический эффект
-          vec3 color;
           if (distorted) {
-            if (hasVideo == 1) {
-              vec3 baseColor = texture2D(cameraTexture, vec2(uv.x, 1.0 - uv.y)).rgb;
-              color = hologramEffect(uv, baseColor);
-            } else {
-              // Fallback: голографический шум вне bbox если нет камеры
-              color = vec3(random(uv + time), random(uv + time * 2.0), random(uv + time * 3.0));
-              color = hologramEffect(uv, color);
-              gl_FragColor = vec4(color, 0.7);
-              return;
-            }
-            
-            // Добавляем мерцание краев
-            float edge = 0.05;
-            if(any(lessThan(uv, vec2(edge))) || any(greaterThan(uv, vec2(1.0 - edge)))) {
-              color += vec3(0.0, 0.5, 1.0) * sin(time * 10.0) * 0.3;
-            }
-            
-            // Корректируем прозрачность для мобильных
             float alpha = isMobile == 1 ? (0.75 + sin(time * 3.0) * 0.15) : (0.85 + sin(time * 3.0) * 0.15);
-            gl_FragColor = vec4(color, alpha);
-          } else if (hasVideo == 0) {
-            // Полностью прозрачный вне области эффекта
-            gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+            gl_FragColor = vec4(color, alpha * glitchAlpha);
           } else {
-            // Полностью прозрачный вне области эффекта
             gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
           }
         }
@@ -861,9 +826,9 @@ function syncHologramFrame() {
   `;
   
   // Динамическая тень
-  const shadowColor = `rgba(0, 195, 255, ${0.6 + 0.2 * Math.sin(t * 2)})`;
+  const shadowColor = `rgba(140, 255, 0, ${0.6 + 0.2 * Math.sin(t * 2)})`;
   const shadowSize = 8 + 4 * Math.sin(t * 3);
-  frame.style.boxShadow = `0 0 ${shadowSize}px ${shadowColor}, inset 0 0 15px rgba(0, 195, 255, 0.5)`;
+  frame.style.boxShadow = `0 0 ${shadowSize}px ${shadowColor}, inset 0 0 15px rgba(140,255,0,0.5)`;
   
   // Меняем цвет рамки со временем
   const borderColor = `rgba(0, ${190 + 30 * Math.sin(t * 4)}, 255, ${0.6 + 0.3 * Math.sin(t * 1.5)})`;
@@ -1085,7 +1050,7 @@ function drawOverlay() {
       
       // Рисуем голографическую рамку
       const borderWidth = 4;
-      const holoBorderColor = `rgba(0, 160, 255, ${0.4 + 0.3 * Math.sin(t * 4)})`;
+      const holoBorderColor = `rgba(140,255,0,${0.4 + 0.3 * Math.sin(t * 4)})`;
       ctx.strokeStyle = holoBorderColor;
       ctx.lineWidth = borderWidth;
       ctx.strokeRect((x - borderWidth/2) * scaleX, (y - borderWidth/2) * scaleY, 
@@ -1284,7 +1249,7 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, 
     const leftParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
     const leftParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
-    ctx.fillStyle = `rgba(100, 200, 255, ${leftParticleAlpha})`;
+    ctx.fillStyle = `rgba(140,255,0,${leftParticleAlpha})`;
     ctx.beginPath();
     ctx.arc(leftParticleX * scaleX, leftParticleY * scaleY, leftParticleSize, 0, Math.PI * 2);
     ctx.fill();
@@ -1295,7 +1260,7 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, 
     const rightParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
     const rightParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
-    ctx.fillStyle = `rgba(100, 200, 255, ${rightParticleAlpha})`;
+    ctx.fillStyle = `rgba(140,255,0,${rightParticleAlpha})`;
     ctx.beginPath();
     ctx.arc(rightParticleX * scaleX, rightParticleY * scaleY, rightParticleSize, 0, Math.PI * 2);
     ctx.fill();
@@ -1312,7 +1277,7 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, 
     const topParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
     const topParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
-    ctx.fillStyle = `rgba(100, 200, 255, ${topParticleAlpha})`;
+    ctx.fillStyle = `rgba(140,255,0,${topParticleAlpha})`;
     ctx.beginPath();
     ctx.arc(topParticleX * scaleX, topParticleY * scaleY, topParticleSize, 0, Math.PI * 2);
     ctx.fill();
@@ -1323,7 +1288,7 @@ function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, 
     const bottomParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
     const bottomParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
     
-    ctx.fillStyle = `rgba(100, 200, 255, ${bottomParticleAlpha})`;
+    ctx.fillStyle = `rgba(140,255,0,${bottomParticleAlpha})`;
     ctx.beginPath();
     ctx.arc(bottomParticleX * scaleX, bottomParticleY * scaleY, bottomParticleSize, 0, Math.PI * 2);
     ctx.fill();
@@ -1414,10 +1379,10 @@ AFRAME.registerComponent('ribbons-effect', {
           if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
           this.ribbonMesh.material.dispose();
         }
-        import('./ar-ribbons.js').then(({ createRibbonFromBBox }) => {
-          this.ribbonMesh = createRibbonFromBBox(boxes[0].bbox, video, this.el.sceneEl.object3D);
-          this.lastBBox = bboxStr;
-        });
+        // import('./ar-ribbons.js').then(({ createRibbonFromBBox }) => {
+        //   this.ribbonMesh = createRibbonFromBBox(boxes[0].bbox, video, this.el.sceneEl.object3D);
+        //   this.lastBBox = bboxStr;
+        // });
       }
     } else if (this.ribbonMesh) {
       this.el.sceneEl.object3D.remove(this.ribbonMesh);
@@ -1608,10 +1573,10 @@ AFRAME.registerComponent('ribbons-effect', {
   position: absolute;
   width: 40px;
   height: 40px;
-  border-color: rgba(0, 215, 255, 0.8);
+  border-color: #8CFF00;
   border-style: solid;
   border-width: 0;
-  box-shadow: 0 0 8px rgba(0, 195, 255, 0.6);
+  box-shadow: 0 0 8px #8CFF00;
   pointer-events: none;
   animation: cornerPulse 3s infinite;
 }
@@ -1655,8 +1620,8 @@ AFRAME.registerComponent('ribbons-effect', {
 /* Соединительные линии между передней и задней гранями */
 .connector-line {
   position: absolute;
-  background-color: rgba(0, 215, 255, 0.6);
-  box-shadow: 0 0 8px rgba(0, 195, 255, 0.6);
+  background-color: #8CFF00;
+  box-shadow: 0 0 8px #8CFF00;
   width: 2px;
   height: 40px;
   transform-style: preserve-3d;
@@ -1694,7 +1659,7 @@ AFRAME.registerComponent('ribbons-effect', {
   left: 0;
   width: 100%;
   height: 100%;
-  border: 1px solid rgba(0, 215, 255, 0.7);
+  border: 1px solid #8CFF00;
   box-shadow: 0 0 8px rgba(0, 195, 255, 0.8), inset 0 0 15px rgba(0, 195, 255, 0.5);
   background: rgba(0, 155, 255, 0.05);
   z-index: 2;
