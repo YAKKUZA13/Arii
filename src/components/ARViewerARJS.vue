@@ -3,31 +3,6 @@
     <!-- Canvas для прямоугольников - перемещаем его перед сценой -->
     <canvas ref="overlayCanvas" class="overlay-canvas"></canvas>
     
-    <!-- Виртуальный голографический экран - теперь полный параллелепипед -->
-    <div class="hologram-frame" ref="hologramFrame">
-      <div class="scan-line"></div>
-      <div class="holo-grid"></div>
-      <!-- Передняя грань -->
-      <div class="front-face"></div>
-      <!-- Соединительные линии для создания параллелепипеда -->
-      <div class="corner-line top-left"></div>
-      <div class="corner-line top-right"></div>
-      <div class="corner-line bottom-left"></div>
-      <div class="corner-line bottom-right"></div>
-      <!-- Соединительные линии между передней и задней гранями -->
-      <div class="connector-line top-left-connector"></div>
-      <div class="connector-line top-right-connector"></div>
-      <div class="connector-line bottom-left-connector"></div>
-      <div class="connector-line bottom-right-connector"></div>
-      <!-- Задняя грань параллелепипеда -->
-      <div class="back-face"></div>
-      <!-- Боковые грани параллелепипеда -->
-      <div class="side-face left-face"></div>
-      <div class="side-face right-face"></div>
-      <div class="side-face top-face"></div>
-      <div class="side-face bottom-face"></div>
-    </div>
-    
     <a-scene
       embedded
       shadow="type: pcfsoft"
@@ -124,7 +99,7 @@
     </div>
 
     <!-- Отладочная информация -->
-    <div class="debug-info" v-if="!debugInfo">
+    <div class="debug-info" v-if="debugInfo">
       <p>Статус камеры: {{ debugInfo.cameraStatus }}</p>
       <p>Разрешение: {{ debugInfo.resolution }}</p>
       <p>Ошибки: {{ debugInfo.errors }}</p>
@@ -748,7 +723,6 @@ AFRAME.registerComponent('rendering-order', {
 });
 
 const overlayCanvas = ref(null)
-const hologramFrame = ref(null)
 let lastRect = null
 let glitchTime = 0;
 let glitchAnimFrame = null;
@@ -773,244 +747,8 @@ function syncOverlayCanvas() {
   canvas.style.zIndex = 3
 }
 
-// Синхронизация голографического экрана
-function syncHologramFrame() {
-  const frame = hologramFrame.value;
-  if (!frame || !lastRect || detectedBoxes.value.length === 0) return;
-  
-  const box = detectedBoxes.value[0];
-  if (!box || !box.bbox) return;
-  
-  let [x, y, w, h] = box.bbox;
-  
-  // Определяем, находимся ли мы на мобильном устройстве
-  const isMobile = window.innerWidth < 768;
-  
-  // Применяем те же преобразования, что и к эффекту глюка
-  const widthReduction = w * 0.05;
-  x += widthReduction;
-  w -= widthReduction * 2;
-  
-  // Корректировка смещения в зависимости от устройства
-  if (isMobile) {
-    // На мобильных устройствах меньшее смещение
-    x -= 30;
-  } else {
-    // На десктопе оставляем прежнее смещение
-    x -= 120;
-  }
-  
-  // Добавляем 3D эффект через CSS трансформации
-  const t = glitchTime / 1000;
-  const scaleX = lastRect.width / 1280;
-  const scaleY = lastRect.height / 720;
-  
-  // Позиционируем рамку
-  frame.style.position = 'fixed';
-  frame.style.left = (lastRect.left + x * scaleX - 10) + 'px';
-  frame.style.top = (lastRect.top + y * scaleY - 10) + 'px';
-  frame.style.width = (w * scaleX + 20) + 'px';
-  frame.style.height = (h * scaleY + 20) + 'px';
-  
-  // Адаптивные трансформации для эффекта 3D
-  const rotationFactor = isMobile ? 0.5 : 1; // Уменьшаем вращение на мобильных устройствах
-  const rotX = 2 + Math.sin(t * 0.5) * 1 * rotationFactor;
-  const rotY = -2 + Math.cos(t * 0.7) * 1 * rotationFactor;
-  const transZ = Math.sin(t * 0.3) * 5 * rotationFactor;
-  
-  frame.style.transform = `
-    perspective(800px) 
-    rotateX(${rotX}deg) 
-    rotateY(${rotY}deg)
-    translateZ(${transZ}px)
-  `;
-  
-  // Динамическая тень
-  const shadowColor = `rgba(140, 255, 0, ${0.6 + 0.2 * Math.sin(t * 2)})`;
-  const shadowSize = 8 + 4 * Math.sin(t * 3);
-  frame.style.boxShadow = `0 0 ${shadowSize}px ${shadowColor}, inset 0 0 15px rgba(140,255,0,0.5)`;
-  
-  // Меняем цвет рамки со временем
-  const borderColor = `rgba(0, ${190 + 30 * Math.sin(t * 4)}, 255, ${0.6 + 0.3 * Math.sin(t * 1.5)})`;
-  frame.style.borderColor = borderColor;
-  
-  // Анимация параллелепипеда
-  
-  // Получаем дочерние элементы
-  const frontFace = frame.querySelector('.front-face');
-  const backFace = frame.querySelector('.back-face');
-  const leftFace = frame.querySelector('.side-face.left-face');
-  const rightFace = frame.querySelector('.side-face.right-face');
-  const topFace = frame.querySelector('.side-face.top-face');
-  const bottomFace = frame.querySelector('.side-face.bottom-face');
-  
-  const topLeftCorner = frame.querySelector('.corner-line.top-left');
-  const topRightCorner = frame.querySelector('.corner-line.top-right');
-  const bottomLeftCorner = frame.querySelector('.corner-line.bottom-left');
-  const bottomRightCorner = frame.querySelector('.corner-line.bottom-right');
-  
-  const topLeftConnector = frame.querySelector('.connector-line.top-left-connector');
-  const topRightConnector = frame.querySelector('.connector-line.top-right-connector');
-  const bottomLeftConnector = frame.querySelector('.connector-line.bottom-left-connector');
-  const bottomRightConnector = frame.querySelector('.connector-line.bottom-right-connector');
-  
-  // Глубина параллелепипеда с анимацией
-  const depth = 40 + 10 * Math.sin(t * 0.8);
-  
-  if (backFace) {
-    // Анимация глубины задней грани
-    backFace.style.transform = `perspective(800px) translateZ(-${depth}px)`;
-    
-    // Изменяем прозрачность и цвет в зависимости от глубины
-    const opacity = 0.3 + 0.1 * Math.sin(t * 1.2);
-    const blueVal = 155 + 20 * Math.sin(t * 2);
-    backFace.style.opacity = opacity;
-    backFace.style.borderColor = `rgba(0, ${blueVal}, 255, ${opacity + 0.1})`;
-    
-    // Анимируем глюк на задней грани
-    const glitchIntensity = 0.5 + 0.3 * Math.sin(t * 2.5);
-    const glitchOffset = 2 + Math.sin(t * 5) * 2;
-    const glitchClip = `polygon(
-      ${glitchOffset}% 0%, 
-      100% 0%, 
-      100% ${100 - glitchOffset * 0.8}%, 
-      ${100 - glitchOffset}% 100%, 
-      0% 100%, 
-      0% ${glitchOffset * 0.8}%
-    )`;
-    backFace.style.clipPath = glitchClip;
-  }
-  
-  // Анимация углов фронтальной рамки
-  const cornerDepth = 30 + 10 * Math.sin(t * 0.9);
-  if (topLeftCorner) {
-    topLeftCorner.style.transform = `perspective(800px) translate3d(-20px, -20px, ${cornerDepth}px)`;
-  }
-  if (topRightCorner) {
-    topRightCorner.style.transform = `perspective(800px) translate3d(20px, -20px, ${cornerDepth}px)`;
-  }
-  if (bottomLeftCorner) {
-    bottomLeftCorner.style.transform = `perspective(800px) translate3d(-20px, 20px, ${cornerDepth}px)`;
-  }
-  if (bottomRightCorner) {
-    bottomRightCorner.style.transform = `perspective(800px) translate3d(20px, 20px, ${cornerDepth}px)`;
-  }
-  
-  // Анимация соединительных линий
-  const connectorHeight = 30 + 10 * Math.sin(t * 1.5);
-  if (topLeftConnector) {
-    topLeftConnector.style.height = `${depth}px`;
-    topLeftConnector.style.transform = `perspective(800px) rotateX(${15 + 5 * Math.sin(t)}deg) rotateY(${-15 - 5 * Math.cos(t)}deg)`;
-  }
-  if (topRightConnector) {
-    topRightConnector.style.height = `${depth}px`;
-    topRightConnector.style.transform = `perspective(800px) rotateX(${15 + 5 * Math.sin(t + 0.5)}deg) rotateY(${15 + 5 * Math.cos(t + 0.5)}deg)`;
-  }
-  if (bottomLeftConnector) {
-    bottomLeftConnector.style.height = `${depth}px`;
-    bottomLeftConnector.style.transform = `perspective(800px) rotateX(${-15 - 5 * Math.sin(t + 1)}deg) rotateY(${-15 - 5 * Math.cos(t + 1)}deg)`;
-  }
-  if (bottomRightConnector) {
-    bottomRightConnector.style.height = `${depth}px`;
-    bottomRightConnector.style.transform = `perspective(800px) rotateX(${-15 - 5 * Math.sin(t + 1.5)}deg) rotateY(${15 + 5 * Math.cos(t + 1.5)}deg)`;
-  }
-  
-  // Анимация боковых граней
-  if (leftFace) {
-    leftFace.style.height = '100%';
-    leftFace.style.width = `${depth}px`;
-    leftFace.style.transform = `rotateY(90deg) translateZ(-${depth/2}px)`;
-    leftFace.style.opacity = 0.3 + 0.2 * Math.sin(t * 1.1);
-    
-    // Добавляем эффект глюка на левой грани
-    const glitchOpacity = 0.3 + 0.2 * Math.sin(t * 3);
-    const glitchColor = 155 + 40 * Math.sin(t * 2.5);
-    leftFace.style.backgroundImage = `
-      linear-gradient(
-        ${90 + 5 * Math.sin(t)}deg, 
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 0%,
-        rgba(0, ${glitchColor + 30}, 255, 0) 50%,
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 100%
-      )
-    `;
-  }
-  
-  if (rightFace) {
-    rightFace.style.height = '100%';
-    rightFace.style.width = `${depth}px`;
-    rightFace.style.transform = `rotateY(-90deg) translateZ(-${depth/2}px)`;
-    rightFace.style.opacity = 0.3 + 0.2 * Math.sin(t * 1.3 + 0.5);
-    
-    // Добавляем эффект глюка на правой грани
-    const glitchOpacity = 0.3 + 0.2 * Math.sin(t * 3 + 0.5);
-    const glitchColor = 155 + 40 * Math.sin(t * 2.5 + 0.5);
-    rightFace.style.backgroundImage = `
-      linear-gradient(
-        ${90 + 5 * Math.sin(t + 1)}deg, 
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 0%,
-        rgba(0, ${glitchColor + 30}, 255, 0) 50%,
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 100%
-      )
-    `;
-  }
-  
-  if (topFace) {
-    topFace.style.width = '100%';
-    topFace.style.height = `${depth}px`;
-    topFace.style.transform = `rotateX(90deg) translateZ(-${depth/2}px)`;
-    topFace.style.opacity = 0.3 + 0.2 * Math.sin(t * 1.5 + 1);
-    
-    // Добавляем эффект глюка на верхней грани
-    const glitchOpacity = 0.3 + 0.2 * Math.sin(t * 3 + 1);
-    const glitchColor = 155 + 40 * Math.sin(t * 2.5 + 1);
-    topFace.style.backgroundImage = `
-      linear-gradient(
-        ${0 + 5 * Math.sin(t + 1.5)}deg, 
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 0%,
-        rgba(0, ${glitchColor + 30}, 255, 0) 50%,
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 100%
-      )
-    `;
-  }
-  
-  if (bottomFace) {
-    bottomFace.style.width = '100%';
-    bottomFace.style.height = `${depth}px`;
-    bottomFace.style.transform = `rotateX(-90deg) translateZ(-${depth/2}px)`;
-    bottomFace.style.opacity = 0.3 + 0.2 * Math.sin(t * 1.7 + 1.5);
-    
-    // Добавляем эффект глюка на нижней грани
-    const glitchOpacity = 0.3 + 0.2 * Math.sin(t * 3 + 1.5);
-    const glitchColor = 155 + 40 * Math.sin(t * 2.5 + 1.5);
-    bottomFace.style.backgroundImage = `
-      linear-gradient(
-        ${0 + 5 * Math.sin(t + 2)}deg, 
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 0%,
-        rgba(0, ${glitchColor + 30}, 255, 0) 50%,
-        rgba(0, ${glitchColor}, 255, ${glitchOpacity}) 100%
-      )
-    `;
-  }
-  
-  // Анимация передней грани
-  if (frontFace) {
-    const frontOpacity = 0.6 + 0.2 * Math.sin(t * 1.1);
-    frontFace.style.opacity = frontOpacity;
-    
-    // Добавляем эффект глюка на передней грани
-    const glitchX = Math.sin(t * 5) * 5;
-    const glitchY = Math.cos(t * 7) * 3;
-    frontFace.style.transform = `translateZ(1px) translate(${glitchX}px, ${glitchY}px)`;
-    
-    // Анимируем цвет границы
-    const glowColor = 195 + 20 * Math.sin(t * 3);
-    frontFace.style.borderColor = `rgba(0, ${glowColor}, 255, ${frontOpacity + 0.2})`;
-  }
-}
-
 function drawOverlay() {
   syncOverlayCanvas();
-  syncHologramFrame();
   const canvas = overlayCanvas.value;
   if (!canvas || !lastRect) return;
   const ctx = canvas.getContext('2d');
@@ -1026,11 +764,6 @@ function drawOverlay() {
   detectedBoxes.value.forEach((box, boxIdx) => { // максимум 1 объект
     // Получаем исходные координаты и размеры
     let [x, y, w, h] = box.bbox;
-    
-    // Уменьшаем ширину на 5% слева и 5% справа
-    const widthReduction = w * 0.05;
-   // x += widthReduction; // смещаем влево на 5% от ширины
-   // w -= widthReduction * 2; // уменьшаем ширину на 10% (5% слева + 5% справа)
     
     // Корректировка смещения в зависимости от устройства
     if (isMobile) {
@@ -1048,45 +781,8 @@ function drawOverlay() {
       // Создаем градиент прозрачности по краям для эффекта объема
       ctx.save();
       
-      // Рисуем голографическую рамку
-      const borderWidth = 4;
-      const holoBorderColor = `rgba(140,255,0,${0.4 + 0.3 * Math.sin(t * 4)})`;
-      ctx.strokeStyle = holoBorderColor;
-      ctx.lineWidth = borderWidth;
-      ctx.strokeRect((x - borderWidth/2) * scaleX, (y - borderWidth/2) * scaleY, 
-                    (w + borderWidth) * scaleX, (h + borderWidth) * scaleY);
-      
-      // Эффект объемного проекционного экрана
-      // Создаем небольшую перспективную деформацию
-      const perspective = 0.1 + 0.05 * Math.sin(t * 2);
-      const centerX = x + w/2;
-      const centerY = y + h/2;
-      
-      // Получаем глубину параллелепипеда - адаптивная для мобильных
-      const depthFactor = isMobile ? 0.6 : 1;
-      const depth = (40 + 10 * Math.sin(t * 0.8)) * depthFactor;
-      
-      // Рисуем линии с переменной высотой для эффекта объема на передней грани
-      drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, centerX, centerY, 'front', isMobile);
-      
-      // Рисуем эффекты на левой грани
-      const leftX = x - depth * 0.7;
-      drawGlitchOnFace(ctx, video, leftX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'left', isMobile);
-      
-      // Рисуем эффекты на правой грани
-      const rightX = x + w;
-      drawGlitchOnFace(ctx, video, rightX, y, depth * 0.7, h, t, scaleX, scaleY, centerX, centerY, 'right', isMobile);
-      
-      // Рисуем эффекты на верхней грани
-      const topY = y - depth * 0.4;
-      drawGlitchOnFace(ctx, video, x, topY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'top', isMobile);
-      
-      // Рисуем эффекты на нижней грани
-      const bottomY = y + h;
-      drawGlitchOnFace(ctx, video, x, bottomY, w, depth * 0.4, t, scaleX, scaleY, centerX, centerY, 'bottom', isMobile);
-      
-      // Добавляем мерцающие частицы для эффекта голограммы
-      drawHolographicParticles(ctx, x, y, w, h, depth, t, scaleX, scaleY, isMobile);
+      // Рисуем линии с искажениями
+      drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, x + w/2, y + h/2, 'front', isMobile);
       
       // Восстанавливаем контекст
       ctx.restore();
@@ -1102,65 +798,24 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
   // Настраиваем интенсивность эффектов в зависимости от устройства
   const deviceFactor = isMobile ? 0.7 : 1;
   
-  const faceIntensity = {
-    'front': 1.0 * deviceFactor,
-    'left': 0.7 * deviceFactor,
-    'right': 0.7 * deviceFactor,
-    'top': 0.6 * deviceFactor,
-    'bottom': 0.6 * deviceFactor,
-    'back': 0.5 * deviceFactor
-  };
-  
-  const intensity = faceIntensity[face] || 0.5 * deviceFactor;
-  
-  // Для боковых граней используем другие шаблоны искажения
-  let distortionFunction;
-  let rgbSplitIntensity;
+  const intensity = deviceFactor;
   
   // Адаптивный шаг для строк эффекта
   const lineStep = isMobile ? 5 : 3; // Увеличиваем шаг на мобильных для оптимизации
   
-  switch(face) {
-    case 'left':
-    case 'right':
-      // Горизонтальные полосы для боковых граней
-      distortionFunction = (i, lineY) => {
-        return {
-          offsetX: (Math.random() - 0.5) * 20 * intensity,
-          offsetY: Math.sin(lineY * 0.2 + t * 3) * 3 * intensity,
-          alpha: 0.5 * intensity + 0.2 * Math.sin(t * 2 + i * 0.1)
-        };
-      };
-      rgbSplitIntensity = 4 * intensity;
-      break;
-      
-    case 'top':
-    case 'bottom':
-      // Вертикальные полосы для верхней и нижней граней
-      distortionFunction = (i, lineY) => {
-        return {
-          offsetX: Math.sin(lineY * 0.5 + t * 2) * 5 * intensity,
-          offsetY: (Math.random() - 0.5) * 10 * intensity,
-          alpha: 0.4 * intensity + 0.3 * Math.sin(t * 3 + i * 0.2)
-        };
-      };
-      rgbSplitIntensity = 3 * intensity;
-      break;
-      
-    default: // front и back
-      // Стандартное искажение для передней и задней граней
-      distortionFunction = (i, lineY) => {
-        const distFromCenter = Math.abs(lineY - centerY) / (height/2);
-        const depthFactor = 1 - distFromCenter * 0.5;
-        
-        return {
-          offsetX: (Math.random() - 0.5) * 40 * intensity * depthFactor,
-          offsetY: Math.sin(t * 3 + lineY * 0.1) * 3 * depthFactor * intensity,
-          alpha: (0.6 + 0.3 * depthFactor + 0.1 * Math.sin(t * 5 + i * 0.1)) * intensity
-        };
-      };
-      rgbSplitIntensity = 8 * intensity;
-  }
+  // Стандартное искажение
+  const distortionFunction = (i, lineY) => {
+    const distFromCenter = Math.abs(lineY - centerY) / (height/2);
+    const depthFactor = 1 - distFromCenter * 0.5;
+    
+    return {
+      offsetX: (Math.random() - 0.5) * 40 * intensity * depthFactor,
+      offsetY: Math.sin(t * 3 + lineY * 0.1) * 3 * depthFactor * intensity,
+      alpha: (0.6 + 0.3 * depthFactor + 0.1 * Math.sin(t * 5 + i * 0.1)) * intensity
+    };
+  };
+  
+  const rgbSplitIntensity = 8 * intensity;
   
   // Рисуем линии с искажениями
   for (let i = 0; i < height; i += lineStep) {
@@ -1171,9 +826,9 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
     const distortion = distortionFunction(i, lineY);
     
     // Пропускаем некоторые строки для оптимизации на мобильных
-    if (isMobile && i % 10 !== 0 && face !== 'front') continue;
+    if (isMobile && i % 10 !== 0) continue;
     
-    // Иногда делаем RGB split для эффекта голограммы
+    // Иногда делаем RGB split для эффекта глюка
     if (i % (isMobile ? 24 : 12) === 0) {
       // Красный канал
       ctx.globalAlpha = distortion.alpha * 0.7;
@@ -1213,85 +868,6 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
         width * scaleX, lineHeight * scaleY
       );
     }
-  }
-}
-
-// Функция для рисования голографических частиц
-function drawHolographicParticles(ctx, x, y, w, h, depth, time, scaleX, scaleY, isMobile = false) {
-  const t = time;
-  
-  // Адаптивное количество частиц в зависимости от устройства
-  const particleFactor = isMobile ? 0.5 : 1;
-  
-  // Основные частицы на передней грани
-  const frontParticleCount = Math.floor(20 * particleFactor);
-  for (let i = 0; i < frontParticleCount; i++) {
-    const particleX = x + Math.random() * w;
-    const particleY = y + Math.random() * h;
-    const particleSize = 1 + Math.random() * 2 * particleFactor;
-    const particleAlpha = 0.2 + 0.8 * Math.random() * particleFactor;
-    
-    ctx.fillStyle = `rgba(120, 220, 255, ${particleAlpha})`;
-    ctx.beginPath();
-    ctx.arc(particleX * scaleX, particleY * scaleY, particleSize, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  
-  // Частицы на боковых гранях
-  const sideParticleCount = Math.floor(10 * particleFactor);
-  const leftX = x - depth * 0.7;
-  const rightX = x + w;
-  
-  for (let i = 0; i < sideParticleCount; i++) {
-    // Левая грань
-    const leftParticleX = leftX + Math.random() * depth * 0.7;
-    const leftParticleY = y + Math.random() * h;
-    const leftParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
-    const leftParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
-    
-    ctx.fillStyle = `rgba(140,255,0,${leftParticleAlpha})`;
-    ctx.beginPath();
-    ctx.arc(leftParticleX * scaleX, leftParticleY * scaleY, leftParticleSize, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Правая грань
-    const rightParticleX = rightX + Math.random() * depth * 0.7;
-    const rightParticleY = y + Math.random() * h;
-    const rightParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
-    const rightParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
-    
-    ctx.fillStyle = `rgba(140,255,0,${rightParticleAlpha})`;
-    ctx.beginPath();
-    ctx.arc(rightParticleX * scaleX, rightParticleY * scaleY, rightParticleSize, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  
-  // Частицы для верхней и нижней граней
-  const topY = y - depth * 0.4;
-  const bottomY = y + h;
-  
-  for (let i = 0; i < sideParticleCount; i++) {
-    // Верхняя грань
-    const topParticleX = x + Math.random() * w;
-    const topParticleY = topY + Math.random() * depth * 0.4;
-    const topParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
-    const topParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
-    
-    ctx.fillStyle = `rgba(140,255,0,${topParticleAlpha})`;
-    ctx.beginPath();
-    ctx.arc(topParticleX * scaleX, topParticleY * scaleY, topParticleSize, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Нижняя грань
-    const bottomParticleX = x + Math.random() * w;
-    const bottomParticleY = bottomY + Math.random() * depth * 0.4;
-    const bottomParticleSize = 0.5 + Math.random() * 1.5 * particleFactor;
-    const bottomParticleAlpha = 0.1 + 0.4 * Math.random() * particleFactor;
-    
-    ctx.fillStyle = `rgba(140,255,0,${bottomParticleAlpha})`;
-    ctx.beginPath();
-    ctx.arc(bottomParticleX * scaleX, bottomParticleY * scaleY, bottomParticleSize, 0, Math.PI * 2);
-    ctx.fill();
   }
 }
 
@@ -1420,380 +996,14 @@ AFRAME.registerComponent('ribbons-effect', {
   position: absolute !important;
   top: 0 !important;
   left: 0 !important;
-  z-index: 5; /* Увеличиваем z-index сцены */
+  z-index: 5;
 }
 
-/* Стили для 3D моделей, чтобы они рендерились поверх эффекта */
 :deep(.a-entity[gltf-model]) {
   z-index: 15 !important;
   pointer-events: auto !important;
-  /* Убираем потенциально проблемные CSS свойства, которые могут влиять на WebGL рендеринг */
   transform-style: preserve-3d;
   backface-visibility: visible;
-}
-
-/* Голографический экран */
-.hologram-frame {
-  position: absolute;
-  border: 1px solid rgba(0, 195, 255, 0.7);
-  box-shadow: 0 0 8px rgba(0, 195, 255, 0.8), inset 0 0 15px rgba(0, 195, 255, 0.5);
-  background: radial-gradient(
-    circle at center,
-    rgba(0, 195, 255, 0.03) 0%,
-    rgba(0, 165, 255, 0.01) 70%,
-    rgba(0, 125, 255, 0) 100%
-  );
-  z-index: 4;
-  pointer-events: none;
-  transform-style: preserve-3d;
-  transform: perspective(800px) rotateX(2deg) rotateY(-2deg);
-  backdrop-filter: blur(1px);
-  transition: all 0.5s ease;
-  opacity: 0.7;
-  overflow: visible; /* Изменяем на visible, чтобы видеть все грани */
-}
-
-/* Адаптивные стили для мобильных устройств */
-@media (max-width: 767px) {
-  .hologram-frame {
-    border-width: 1px;
-    box-shadow: 0 0 5px rgba(0, 195, 255, 0.7), inset 0 0 10px rgba(0, 195, 255, 0.4);
-  }
-  
-  .corner-line {
-    width: 30px;
-    height: 30px;
-  }
-  
-  .corner-line.top-left {
-    top: -15px;
-    left: -15px;
-  }
-  
-  .corner-line.top-right {
-    top: -15px;
-    right: -15px;
-  }
-  
-  .corner-line.bottom-left {
-    bottom: -15px;
-    left: -15px;
-  }
-  
-  .corner-line.bottom-right {
-    bottom: -15px;
-    right: -15px;
-  }
-  
-  .connector-line {
-    width: 1px;
-    height: 30px;
-  }
-  
-  .side-face {
-    border-width: 1px;
-  }
-  
-  .left-face, .right-face {
-    width: 30px;
-  }
-  
-  .top-face, .bottom-face {
-    height: 30px;
-  }
-}
-
-.hologram-frame::before,
-.hologram-frame::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border: 1px solid rgba(0, 225, 255, 0.3);
-  animation: pulse 3s infinite alternate ease-in-out;
-  pointer-events: none;
-}
-
-.hologram-frame::after {
-  animation-delay: 1.5s;
-}
-
-/* Линия сканирования */
-.scan-line {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(
-    to right,
-    rgba(0, 195, 255, 0),
-    rgba(0, 195, 255, 0.5),
-    rgba(0, 195, 255, 0.8),
-    rgba(0, 195, 255, 0.5),
-    rgba(0, 195, 255, 0)
-  );
-  box-shadow: 0 0 8px rgba(0, 195, 255, 0.8);
-  animation: scanLine 3s linear infinite;
-  opacity: 0.7;
-}
-
-@media (max-width: 767px) {
-  .scan-line {
-    height: 1px;
-    box-shadow: 0 0 4px rgba(0, 195, 255, 0.6);
-  }
-}
-
-/* Сетка голограммы */
-.holo-grid {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: 
-    linear-gradient(rgba(0, 195, 255, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 195, 255, 0.05) 1px, transparent 1px);
-  background-size: 20px 20px;
-  opacity: 0.5;
-  animation: gridPulse 4s infinite alternate ease-in-out;
-}
-
-@media (max-width: 767px) {
-  .holo-grid {
-    background-size: 15px 15px;
-  }
-}
-
-/* Соединительные линии для параллелепипеда */
-.corner-line {
-  position: absolute;
-  width: 40px;
-  height: 40px;
-  border-color: #8CFF00;
-  border-style: solid;
-  border-width: 0;
-  box-shadow: 0 0 8px #8CFF00;
-  pointer-events: none;
-  animation: cornerPulse 3s infinite;
-}
-
-.corner-line.top-left {
-  top: -20px;
-  left: -20px;
-  border-top-width: 2px;
-  border-left-width: 2px;
-  transform: perspective(800px) translate3d(-20px, -20px, 30px);
-  animation-delay: 0s;
-}
-
-.corner-line.top-right {
-  top: -20px;
-  right: -20px;
-  border-top-width: 2px;
-  border-right-width: 2px;
-  transform: perspective(800px) translate3d(20px, -20px, 30px);
-  animation-delay: 0.75s;
-}
-
-.corner-line.bottom-left {
-  bottom: -20px;
-  left: -20px;
-  border-bottom-width: 2px;
-  border-left-width: 2px;
-  transform: perspective(800px) translate3d(-20px, 20px, 30px);
-  animation-delay: 1.5s;
-}
-
-.corner-line.bottom-right {
-  bottom: -20px;
-  right: -20px;
-  border-bottom-width: 2px;
-  border-right-width: 2px;
-  transform: perspective(800px) translate3d(20px, 20px, 30px);
-  animation-delay: 2.25s;
-}
-
-/* Соединительные линии между передней и задней гранями */
-.connector-line {
-  position: absolute;
-  background-color: #8CFF00;
-  box-shadow: 0 0 8px #8CFF00;
-  width: 2px;
-  height: 40px;
-  transform-style: preserve-3d;
-  animation: connectorPulse 3s infinite alternate;
-}
-
-.connector-line.top-left-connector {
-  top: -20px;
-  left: -20px;
-  transform: perspective(800px) rotateX(15deg) rotateY(-15deg);
-}
-
-.connector-line.top-right-connector {
-  top: -20px;
-  right: -20px;
-  transform: perspective(800px) rotateX(15deg) rotateY(15deg);
-}
-
-.connector-line.bottom-left-connector {
-  bottom: -20px;
-  left: -20px;
-  transform: perspective(800px) rotateX(-15deg) rotateY(-15deg);
-}
-
-.connector-line.bottom-right-connector {
-  bottom: -20px;
-  right: -20px;
-  transform: perspective(800px) rotateX(-15deg) rotateY(15deg);
-}
-
-/* Передняя грань параллелепипеда - поверх рамки */
-.front-face {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border: 1px solid #8CFF00;
-  box-shadow: 0 0 8px rgba(0, 195, 255, 0.8), inset 0 0 15px rgba(0, 195, 255, 0.5);
-  background: rgba(0, 155, 255, 0.05);
-  z-index: 2;
-  transform: translateZ(1px);
-  animation: frontFacePulse 4s infinite alternate ease-in-out;
-}
-
-@keyframes frontFacePulse {
-  0% {
-    box-shadow: 0 0 8px rgba(0, 195, 255, 0.6), inset 0 0 15px rgba(0, 195, 255, 0.3);
-    background: rgba(0, 155, 255, 0.03);
-  }
-  100% {
-    box-shadow: 0 0 12px rgba(0, 215, 255, 0.8), inset 0 0 20px rgba(0, 215, 255, 0.5);
-    background: rgba(0, 155, 255, 0.07);
-  }
-}
-
-/* Боковые грани параллелепипеда */
-.side-face {
-  position: absolute;
-  background: rgba(0, 150, 255, 0.1);
-  border: 1px solid rgba(0, 195, 255, 0.5);
-  box-shadow: 0 0 5px rgba(0, 195, 255, 0.4);
-  transform-style: preserve-3d;
-  pointer-events: none;
-  opacity: 0.6;
-  z-index: 1;
-}
-
-.left-face {
-  top: 0;
-  left: 0;
-  width: 40px;
-  height: 100%;
-  transform-origin: left center;
-  transform: translateX(-40px) rotateY(90deg);
-}
-
-.right-face {
-  top: 0;
-  right: 0;
-  width: 40px;
-  height: 100%;
-  transform-origin: right center;
-  transform: translateX(40px) rotateY(-90deg);
-}
-
-.top-face {
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 40px;
-  transform-origin: top center;
-  transform: translateY(-40px) rotateX(-90deg);
-}
-
-.bottom-face {
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 40px;
-  transform-origin: bottom center;
-  transform: translateY(40px) rotateX(90deg);
-}
-
-/* Задняя грань параллелепипеда */
-.back-face {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  top: 0;
-  left: 0;
-  border: 1px solid rgba(0, 155, 255, 0.4);
-  box-shadow: 0 0 5px rgba(0, 155, 255, 0.3);
-  transform: perspective(800px) translateZ(-40px);
-  opacity: 0.4;
-  background: rgba(0, 100, 255, 0.05);
-  pointer-events: none;
-}
-
-/* Анимация для соединительных линий */
-@keyframes connectorPulse {
-  0% {
-    opacity: 0.3;
-    height: 30px;
-  }
-  100% {
-    opacity: 0.6;
-    height: 40px;
-  }
-}
-
-/* Анимация пульсации для углов */
-@keyframes cornerPulse {
-  0%, 100% {
-    opacity: 0.4;
-    box-shadow: 0 0 5px rgba(0, 195, 255, 0.4);
-  }
-  50% {
-    opacity: 0.8;
-    box-shadow: 0 0 12px rgba(0, 215, 255, 0.8);
-  }
-}
-
-@keyframes scanLine {
-  0% {
-    top: 0%;
-  }
-  100% {
-    top: 100%;
-  }
-}
-
-@keyframes gridPulse {
-  0% {
-    opacity: 0.3;
-    background-size: 20px 20px;
-  }
-  100% {
-    opacity: 0.5;
-    background-size: 22px 22px;
-  }
-}
-
-@keyframes pulse {
-  0% {
-    opacity: 0.3;
-    transform: scale(0.98);
-  }
-  100% {
-    opacity: 0.8;
-    transform: scale(1.01);
-  }
 }
 
 #glitch-overlay {
@@ -1849,11 +1059,10 @@ AFRAME.registerComponent('ribbons-effect', {
   width: 100% !important;
   height: 100% !important;
   pointer-events: none;
-  z-index: 3; /* Уменьшаем z-index canvas, чтобы он был ниже сцены */
+  z-index: 3;
 }
 
 @media (max-width: 767px) {
-  /* Убираем отладочную информацию на мобильных устройствах */
   .debug-info {
     font-size: 10px;
     max-width: 50%;
