@@ -797,25 +797,62 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
   
   // Настраиваем интенсивность эффектов в зависимости от устройства
   const deviceFactor = isMobile ? 0.7 : 1;
-  
   const intensity = deviceFactor;
   
-  // Адаптивный шаг для строк эффекта
-  const lineStep = isMobile ? 5 : 3; // Увеличиваем шаг на мобильных для оптимизации
+  // Параметры перспективы
+  const perspectiveOriginX = window.innerWidth / 2;
+  const perspectiveOriginY = window.innerHeight / 2;
+  const maxPerspectiveShift = 20 * deviceFactor;
   
-  // Стандартное искажение
+  // Вычисляем относительное положение объекта от центра экрана
+  const relativeX = (centerX - perspectiveOriginX) / perspectiveOriginX;
+  const relativeY = (centerY - perspectiveOriginY) / perspectiveOriginY;
+  
+  // Создаем эффект параллакса на основе положения
+  const parallaxX = relativeX * maxPerspectiveShift;
+  const parallaxY = relativeY * maxPerspectiveShift;
+  
+  // Адаптивный шаг для строк эффекта
+  const lineStep = isMobile ? 5 : 2;
+  
+  // Функция искажения с учетом 3D эффекта
   const distortionFunction = (i, lineY) => {
-    const distFromCenter = Math.abs(lineY - centerY) / (height/2);
+    // Вычисляем расстояние от центра для создания эффекта глубины
+    const distFromCenterX = (x + width/2 - centerX) / width;
+    const distFromCenterY = (lineY - centerY) / height;
+    const distFromCenter = Math.sqrt(distFromCenterX * distFromCenterX + distFromCenterY * distFromCenterY);
+    
+    // Создаем эффект глубины
     const depthFactor = 1 - distFromCenter * 0.5;
     
+    // Добавляем волновой эффект для создания ощущения объема
+    const waveX = Math.sin(t * 2 + lineY * 0.05) * 15 * intensity * depthFactor;
+    const waveY = Math.cos(t * 3 + lineY * 0.03) * 10 * intensity * depthFactor;
+    
+    // Добавляем случайное смещение с учетом глубины
+    const randomX = (Math.random() - 0.5) * 30 * intensity * depthFactor;
+    const randomY = (Math.random() - 0.5) * 20 * intensity * depthFactor;
+    
+    // Комбинируем все эффекты смещения
+    const totalOffsetX = waveX + randomX + parallaxX * depthFactor;
+    const totalOffsetY = waveY + randomY + parallaxY * depthFactor;
+    
+    // Создаем пульсацию прозрачности для эффекта голограммы
+    const pulseAlpha = 0.6 + 0.2 * Math.sin(t * 4 + distFromCenter * 5);
+    
+    // Добавляем шум к прозрачности для создания эффекта помех
+    const noiseAlpha = Math.random() * 0.3 * depthFactor;
+    
     return {
-      offsetX: (Math.random() - 0.5) * 40 * intensity * depthFactor,
-      offsetY: Math.sin(t * 3 + lineY * 0.1) * 3 * depthFactor * intensity,
-      alpha: (0.6 + 0.3 * depthFactor + 0.1 * Math.sin(t * 5 + i * 0.1)) * intensity
+      offsetX: totalOffsetX,
+      offsetY: totalOffsetY,
+      alpha: (pulseAlpha + noiseAlpha) * intensity * depthFactor,
+      depthFactor: depthFactor
     };
   };
   
-  const rgbSplitIntensity = 8 * intensity;
+  // Базовая интенсивность RGB-сдвига
+  const baseRgbSplit = 8 * intensity;
   
   // Рисуем линии с искажениями
   for (let i = 0; i < height; i += lineStep) {
@@ -828,44 +865,57 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
     // Пропускаем некоторые строки для оптимизации на мобильных
     if (isMobile && i % 10 !== 0) continue;
     
-    // Иногда делаем RGB split для эффекта глюка
+    // Вычисляем RGB-сдвиг с учетом глубины
+    const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor;
+    
+    // Применяем эффект RGB-сдвига с переменной интенсивностью
     if (i % (isMobile ? 24 : 12) === 0) {
+      // Добавляем волновое искажение для RGB каналов
+      const rgbWaveX = Math.sin(t * 3 + lineY * 0.02) * rgbSplitIntensity;
+      const rgbWaveY = Math.cos(t * 2 + lineY * 0.03) * rgbSplitIntensity;
+      
       // Красный канал
       ctx.globalAlpha = distortion.alpha * 0.7;
       ctx.drawImage(
         video,
         x, lineY, width, lineHeight,
-        (x + distortion.offsetX + rgbSplitIntensity) * scaleX, 
-        (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX, lineHeight * scaleY
+        (x + distortion.offsetX + rgbWaveX) * scaleX, 
+        (lineY + distortion.offsetY + rgbWaveY) * scaleY, 
+        width * scaleX * (1 + distortion.depthFactor * 0.05), 
+        lineHeight * scaleY
       );
+      
       // Зелёный канал
-      ctx.globalAlpha = distortion.alpha * 0.7;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX - rgbSplitIntensity) * scaleX, 
-        (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX, lineHeight * scaleY
-      );
-      // Синий канал
-      ctx.globalAlpha = distortion.alpha * 0.7;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX) * scaleX, 
-        (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX, lineHeight * scaleY
-      );
-    } else {
-      // Обычная смазанная полоса
       ctx.globalAlpha = distortion.alpha * 0.8;
       ctx.drawImage(
         video,
         x, lineY, width, lineHeight,
         (x + distortion.offsetX) * scaleX, 
         (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX, lineHeight * scaleY
+        width * scaleX, 
+        lineHeight * scaleY
+      );
+      
+      // Синий канал
+      ctx.globalAlpha = distortion.alpha * 0.7;
+      ctx.drawImage(
+        video,
+        x, lineY, width, lineHeight,
+        (x + distortion.offsetX - rgbWaveX) * scaleX, 
+        (lineY + distortion.offsetY - rgbWaveY) * scaleY, 
+        width * scaleX * (1 - distortion.depthFactor * 0.05), 
+        lineHeight * scaleY
+      );
+    } else {
+      // Обычная смазанная полоса с эффектом глубины
+      ctx.globalAlpha = distortion.alpha * 0.8;
+      ctx.drawImage(
+        video,
+        x, lineY, width, lineHeight,
+        (x + distortion.offsetX) * scaleX, 
+        (lineY + distortion.offsetY) * scaleY, 
+        width * scaleX * (1 + (Math.random() - 0.5) * 0.1 * distortion.depthFactor), 
+        lineHeight * scaleY
       );
     }
   }
