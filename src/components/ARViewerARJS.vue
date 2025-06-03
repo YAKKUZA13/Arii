@@ -99,7 +99,7 @@
     </div>
 
     <!-- Отладочная информация -->
-    <div class="debug-info" v-if="debugInfo">
+    <div class="debug-info" v-if="!debugInfo">
       <p>Статус камеры: {{ debugInfo.cameraStatus }}</p>
       <p>Разрешение: {{ debugInfo.resolution }}</p>
       <p>Ошибки: {{ debugInfo.errors }}</p>
@@ -814,8 +814,25 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
   
   // Адаптивный шаг для строк эффекта
   const lineStep = isMobile ? 5 : 2;
+  const verticalStripWidth = lineStep * 25; // Вертикальные полосы в 25 раз шире (5 раз больше чем было)
   
-  // Функция искажения с учетом 3D эффекта
+  // Генерируем вертикальные полосы в случайных местах
+  const verticalStrips = [];
+  const numVerticalStrips = Math.floor(width / (verticalStripWidth * 2)); // Каждая вторая возможная позиция
+  
+  for (let i = 0; i < numVerticalStrips; i++) {
+    // Случайная позиция для вертикальной полосы
+    const stripX = x + Math.random() * (width - verticalStripWidth);
+    
+    if (Math.random() > 0.6) { // 40% шанс появления вертикальной полосы
+      verticalStrips.push({
+        x: stripX,
+        width: verticalStripWidth
+      });
+    }
+  }
+  
+  // Функция искажения с учетом 3D эффекта для горизонтальных полос
   const distortionFunction = (i, lineY) => {
     // Вычисляем расстояние от центра для создания эффекта глубины
     const distFromCenterX = (x + width/2 - centerX) / width;
@@ -851,10 +868,106 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
     };
   };
   
+  // Функция искажения для вертикальных полос
+  const verticalDistortionFunction = (stripX, columnX) => {
+    const distFromCenterX = (columnX - centerX) / width;
+    const distFromCenterY = (y + height/2 - centerY) / height;
+    const distFromCenter = Math.sqrt(distFromCenterX * distFromCenterX + distFromCenterY * distFromCenterY);
+    
+    const depthFactor = 1 - distFromCenter * 0.3;
+    
+    // Волновые искажения для вертикальных полос
+    const waveX = Math.cos(t * 1.5 + columnX * 0.03) * 20 * intensity * depthFactor;
+    const waveY = Math.sin(t * 2.5 + columnX * 0.04) * 15 * intensity * depthFactor;
+    
+    const randomX = (Math.random() - 0.5) * 25 * intensity * depthFactor;
+    const randomY = (Math.random() - 0.5) * 35 * intensity * depthFactor;
+    
+    const totalOffsetX = waveX + randomX + parallaxX * depthFactor;
+    const totalOffsetY = waveY + randomY + parallaxY * depthFactor;
+    
+    const pulseAlpha = 0.5 + 0.3 * Math.cos(t * 3 + distFromCenter * 4);
+    const noiseAlpha = Math.random() * 0.4 * depthFactor;
+    
+    return {
+      offsetX: totalOffsetX,
+      offsetY: totalOffsetY,
+      alpha: (pulseAlpha + noiseAlpha) * intensity * depthFactor,
+      depthFactor: depthFactor
+    };
+  };
+  
   // Базовая интенсивность RGB-сдвига
   const baseRgbSplit = 8 * intensity;
   
-  // Рисуем линии с искажениями
+  // Сначала рисуем вертикальные полосы
+  verticalStrips.forEach(strip => {
+    for (let j = 0; j < strip.width; j += Math.ceil(lineStep * 2)) {
+      const columnX = strip.x + j;
+      const columnWidth = Math.ceil(lineStep * 2);
+      
+      // Получаем параметры искажения для текущей колонки
+      const distortion = verticalDistortionFunction(strip.x, columnX);
+      
+      // Пропускаем некоторые колонки для оптимизации на мобильных
+      if (isMobile && j % 16 !== 0) continue;
+      
+      // Вычисляем RGB-сдвиг с учетом глубины
+      const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor * 1.2;
+      
+      // Применяем эффект RGB-сдвига для вертикальных полос
+      if (j % (isMobile ? 32 : 16) === 0) {
+        const rgbWaveX = Math.cos(t * 4 + columnX * 0.03) * rgbSplitIntensity;
+        const rgbWaveY = Math.sin(t * 3 + columnX * 0.025) * rgbSplitIntensity;
+        
+        // Красный канал
+        ctx.globalAlpha = distortion.alpha * 0.8;
+        ctx.drawImage(
+          video,
+          columnX, y, columnWidth, height,
+          (columnX + distortion.offsetX + rgbWaveX) * scaleX, 
+          (y + distortion.offsetY + rgbWaveY) * scaleY, 
+          columnWidth * scaleX * (1 + distortion.depthFactor * 0.08), 
+          height * scaleY
+        );
+        
+        // Зелёный канал
+        ctx.globalAlpha = distortion.alpha * 0.9;
+        ctx.drawImage(
+          video,
+          columnX, y, columnWidth, height,
+          (columnX + distortion.offsetX) * scaleX, 
+          (y + distortion.offsetY) * scaleY, 
+          columnWidth * scaleX, 
+          height * scaleY
+        );
+        
+        // Синий канал
+        ctx.globalAlpha = distortion.alpha * 0.8;
+        ctx.drawImage(
+          video,
+          columnX, y, columnWidth, height,
+          (columnX + distortion.offsetX - rgbWaveX) * scaleX, 
+          (y + distortion.offsetY - rgbWaveY) * scaleY, 
+          columnWidth * scaleX * (1 - distortion.depthFactor * 0.08), 
+          height * scaleY
+        );
+      } else {
+        // Обычная смазанная колонка с эффектом глубины
+        ctx.globalAlpha = distortion.alpha * 0.7;
+        ctx.drawImage(
+          video,
+          columnX, y, columnWidth, height,
+          (columnX + distortion.offsetX) * scaleX, 
+          (y + distortion.offsetY) * scaleY, 
+          columnWidth * scaleX * (1 + (Math.random() - 0.5) * 0.15 * distortion.depthFactor), 
+          height * scaleY
+        );
+      }
+    }
+  });
+  
+  // Затем рисуем горизонтальные линии (возвращаем к оригинальному количеству)
   for (let i = 0; i < height; i += lineStep) {
     const lineY = y + i;
     const lineHeight = lineStep;
