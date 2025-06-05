@@ -99,7 +99,7 @@
     </div>
 
     <!-- Отладочная информация -->
-    <div class="debug-info" v-if="!debugInfo">
+    <div class="debug-info" v-if="debugInfo">
       <p>Статус камеры: {{ debugInfo.cameraStatus }}</p>
       <p>Разрешение: {{ debugInfo.resolution }}</p>
       <p>Ошибки: {{ debugInfo.errors }}</p>
@@ -730,6 +730,83 @@ let glitchAnimFrame = null;
 // Кэшируем параметры полос для каждого bbox на несколько кадров вперёд
 let glitchCache = {};
 
+// Статичные вертикальные полосы - генерируются один раз и остаются неизменными
+let staticVerticalStrips = [];
+let lastBBoxString = '';
+
+// Система плавного перехода эффекта
+let effectStartTime = null;
+let effectIntensity = 0; // От 0 до 1
+const TRANSITION_DURATION = 3000; // 3 секунды в миллисекундах
+
+// Функция для обновления интенсивности эффекта
+function updateEffectIntensity() {
+  if (effectStartTime === null) {
+    // Эффект еще не начался
+    effectIntensity = 0;
+    return;
+  }
+  
+  const currentTime = performance.now();
+  const elapsedTime = currentTime - effectStartTime;
+  
+  if (elapsedTime >= TRANSITION_DURATION) {
+    // Переход завершен, эффект на максимуме
+    effectIntensity = 1;
+  } else {
+    // Плавный переход (easing функция для более плавного перехода)
+    const progress = elapsedTime / TRANSITION_DURATION;
+    effectIntensity = Math.pow(progress, 1.5); // Ease-in эффект
+  }
+}
+
+// Функция для генерации статичных вертикальных полос
+function generateStaticVerticalStrips(x, y, width, height, lineStep) {
+  const verticalStripWidth = lineStep * 225; // ширина вертикальных полос
+  const verticalStrips = [];
+  const numVerticalStrips = Math.floor(width / (verticalStripWidth * 1.5)); // Больше полос, но они уже не занимают всю высоту
+  
+  for (let i = 0; i < numVerticalStrips; i++) {
+    // Случайная позиция для вертикальной полосы
+    const stripX = x + Math.random() * (width - verticalStripWidth);
+    
+    if (Math.random() > 0.5) { // 50% шанс появления вертикальной полосы
+      // Создаем сегменты разной высоты внутри одной вертикальной полосы
+      const segments = [];
+      let currentY = y;
+      
+      while (currentY < y + height) {
+        // Случайная высота сегмента (от 20% до 80% от общей высоты)
+        const segmentHeight = Math.random() * (height * 0.6) + (height * 0.2);
+        const segmentEndY = Math.min(currentY + segmentHeight, y + height);
+        
+        // 60% шанс что сегмент будет нарисован (создаем разрывы)
+        if (Math.random() > 0.4) {
+          segments.push({
+            startY: currentY,
+            endY: segmentEndY,
+            height: segmentEndY - currentY
+          });
+        }
+        
+        // Добавляем случайный промежуток между сегментами
+        const gap = Math.random() * (height * 0.3) + (height * 0.1);
+        currentY = segmentEndY + gap;
+      }
+      
+      if (segments.length > 0) {
+        verticalStrips.push({
+          x: stripX,
+          width: verticalStripWidth,
+          segments: segments
+        });
+      }
+    }
+  }
+  
+  return verticalStrips;
+}
+
 function syncOverlayCanvas() {
   const canvas = overlayCanvas.value
   const aframeCanvas = document.querySelector('a-scene canvas')
@@ -761,6 +838,26 @@ function drawOverlay() {
   // Определяем, находимся ли мы на мобильном устройстве
   const isMobile = window.innerWidth < 768;
 
+  // Проверяем, есть ли обнаруженные объекты
+  if (detectedBoxes.value.length > 0) {
+    // Запускаем эффект при первом обнаружении объекта
+    if (effectStartTime === null) {
+      effectStartTime = performance.now();
+    }
+  } else {
+    // Сбрасываем эффект если объекты исчезли
+    effectStartTime = null;
+    effectIntensity = 0;
+  }
+  
+  // Обновляем интенсивность эффекта
+  updateEffectIntensity();
+  
+  // Если эффект еще не начался или интенсивность = 0, ничего не рисуем
+  if (effectIntensity === 0) {
+    return;
+  }
+
   detectedBoxes.value.forEach((box, boxIdx) => { // максимум 1 объект
     // Получаем исходные координаты и размеры
     let [x, y, w, h] = box.bbox;
@@ -775,18 +872,8 @@ function drawOverlay() {
     }
     
     if (video && video.readyState === 4) {
-      // Добавляем пространственность через неравномерную деформацию
-      // и изменение размера полос в зависимости от предполагаемой "глубины"
-      
-      // Создаем градиент прозрачности по краям для эффекта объема
-      ctx.save();
-      
-      // Рисуем линии с искажениями
+      // Рисуем глитч-эффект с текущей интенсивностью
       drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, x + w/2, y + h/2, 'front', isMobile);
-      
-      // Восстанавливаем контекст
-      ctx.restore();
-      ctx.globalAlpha = 1.0;
     }
   });
 }
@@ -795,9 +882,12 @@ function drawOverlay() {
 function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY, centerX, centerY, face, isMobile = false) {
   const t = time;
   
-  // Настраиваем интенсивность эффектов в зависимости от устройства
+  // Настраиваем интенсивность эффектов в зависимости от устройства и анимации перехода
   const deviceFactor = isMobile ? 0.7 : 1;
-  const intensity = deviceFactor;
+  const intensity = deviceFactor * effectIntensity; // Применяем интенсивность перехода
+  
+  // Если интенсивность слишком мала, ничего не рисуем
+  if (intensity < 0.01) return;
   
   // Параметры перспективы
   const perspectiveOriginX = window.innerWidth / 2;
@@ -814,22 +904,12 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
   
   // Адаптивный шаг для строк эффекта
   const lineStep = isMobile ? 5 : 2;
-  const verticalStripWidth = lineStep * 25; // Вертикальные полосы в 25 раз шире (5 раз больше чем было)
   
-  // Генерируем вертикальные полосы в случайных местах
-  const verticalStrips = [];
-  const numVerticalStrips = Math.floor(width / (verticalStripWidth * 2)); // Каждая вторая возможная позиция
-  
-  for (let i = 0; i < numVerticalStrips; i++) {
-    // Случайная позиция для вертикальной полосы
-    const stripX = x + Math.random() * (width - verticalStripWidth);
-    
-    if (Math.random() > 0.6) { // 40% шанс появления вертикальной полосы
-      verticalStrips.push({
-        x: stripX,
-        width: verticalStripWidth
-      });
-    }
+  // Проверяем, изменились ли размеры/позиция bbox - если да, то пересоздаем вертикальные полосы
+  const currentBBoxString = `${x}_${y}_${width}_${height}`;
+  if (lastBBoxString !== currentBBoxString) {
+    staticVerticalStrips = generateStaticVerticalStrips(x, y, width, height, lineStep);
+    lastBBoxString = currentBBoxString;
   }
   
   // Функция искажения с учетом 3D эффекта для горизонтальных полос
@@ -868,7 +948,7 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
     };
   };
   
-  // Функция искажения для вертикальных полос
+  // Функция искажения для вертикальных полос (статичная версия)
   const verticalDistortionFunction = (stripX, columnX) => {
     const distFromCenterX = (columnX - centerX) / width;
     const distFromCenterY = (y + height/2 - centerY) / height;
@@ -876,96 +956,100 @@ function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY,
     
     const depthFactor = 1 - distFromCenter * 0.3;
     
-    // Волновые искажения для вертикальных полос
-    const waveX = Math.cos(t * 1.5 + columnX * 0.03) * 20 * intensity * depthFactor;
-    const waveY = Math.sin(t * 2.5 + columnX * 0.04) * 15 * intensity * depthFactor;
+    // Убираем случайные искажения, оставляем только плавные time-based эффекты
+    const waveX = Math.cos(t * 0.3 + columnX * 0.01) * 5 * intensity * depthFactor; // Медленные, небольшие волны
+    const waveY = Math.sin(t * 0.4 + columnX * 0.01) * 3 * intensity * depthFactor;
     
-    const randomX = (Math.random() - 0.5) * 25 * intensity * depthFactor;
-    const randomY = (Math.random() - 0.5) * 35 * intensity * depthFactor;
+    // Убираем случайные смещения
+    const totalOffsetX = waveX + parallaxX * depthFactor;
+    const totalOffsetY = waveY + parallaxY * depthFactor;
     
-    const totalOffsetX = waveX + randomX + parallaxX * depthFactor;
-    const totalOffsetY = waveY + randomY + parallaxY * depthFactor;
-    
-    const pulseAlpha = 0.5 + 0.3 * Math.cos(t * 3 + distFromCenter * 4);
-    const noiseAlpha = Math.random() * 0.4 * depthFactor;
+    // Статичная прозрачность без случайного шума
+    const pulseAlpha = 0.7 + 0.1 * Math.cos(t * 0.5 + distFromCenter * 2); // Медленная пульсация
     
     return {
       offsetX: totalOffsetX,
       offsetY: totalOffsetY,
-      alpha: (pulseAlpha + noiseAlpha) * intensity * depthFactor,
+      alpha: pulseAlpha * intensity * depthFactor,
       depthFactor: depthFactor
     };
   };
   
   // Базовая интенсивность RGB-сдвига
-  const baseRgbSplit = 8 * intensity;
+  const baseRgbSplit = 8 * intensity; // Применяем интенсивность к RGB-сдвигу
   
-  // Сначала рисуем вертикальные полосы
-  verticalStrips.forEach(strip => {
-    for (let j = 0; j < strip.width; j += Math.ceil(lineStep * 2)) {
-      const columnX = strip.x + j;
-      const columnWidth = Math.ceil(lineStep * 2);
-      
-      // Получаем параметры искажения для текущей колонки
-      const distortion = verticalDistortionFunction(strip.x, columnX);
-      
-      // Пропускаем некоторые колонки для оптимизации на мобильных
-      if (isMobile && j % 16 !== 0) continue;
-      
-      // Вычисляем RGB-сдвиг с учетом глубины
-      const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor * 1.2;
-      
-      // Применяем эффект RGB-сдвига для вертикальных полос
-      if (j % (isMobile ? 32 : 16) === 0) {
-        const rgbWaveX = Math.cos(t * 4 + columnX * 0.03) * rgbSplitIntensity;
-        const rgbWaveY = Math.sin(t * 3 + columnX * 0.025) * rgbSplitIntensity;
-        
-        // Красный канал
-        ctx.globalAlpha = distortion.alpha * 0.8;
-        ctx.drawImage(
-          video,
-          columnX, y, columnWidth, height,
-          (columnX + distortion.offsetX + rgbWaveX) * scaleX, 
-          (y + distortion.offsetY + rgbWaveY) * scaleY, 
-          columnWidth * scaleX * (1 + distortion.depthFactor * 0.08), 
-          height * scaleY
-        );
-        
-        // Зелёный канал
-        ctx.globalAlpha = distortion.alpha * 0.9;
-        ctx.drawImage(
-          video,
-          columnX, y, columnWidth, height,
-          (columnX + distortion.offsetX) * scaleX, 
-          (y + distortion.offsetY) * scaleY, 
-          columnWidth * scaleX, 
-          height * scaleY
-        );
-        
-        // Синий канал
-        ctx.globalAlpha = distortion.alpha * 0.8;
-        ctx.drawImage(
-          video,
-          columnX, y, columnWidth, height,
-          (columnX + distortion.offsetX - rgbWaveX) * scaleX, 
-          (y + distortion.offsetY - rgbWaveY) * scaleY, 
-          columnWidth * scaleX * (1 - distortion.depthFactor * 0.08), 
-          height * scaleY
-        );
-      } else {
-        // Обычная смазанная колонка с эффектом глубины
-        ctx.globalAlpha = distortion.alpha * 0.7;
-        ctx.drawImage(
-          video,
-          columnX, y, columnWidth, height,
-          (columnX + distortion.offsetX) * scaleX, 
-          (y + distortion.offsetY) * scaleY, 
-          columnWidth * scaleX * (1 + (Math.random() - 0.5) * 0.15 * distortion.depthFactor), 
-          height * scaleY
-        );
-      }
-    }
-  });
+  // Рисуем статичные вертикальные полосы (только если интенсивность достаточна)
+  if (effectIntensity > 0.3) { // Вертикальные полосы появляются после 30% перехода
+    staticVerticalStrips.forEach(strip => {
+      // Рисуем каждый сегмент полосы отдельно
+      strip.segments.forEach(segment => {
+        for (let j = 0; j < strip.width; j += Math.ceil(lineStep * 4)) {
+          const columnX = strip.x + j;
+          const columnWidth = Math.ceil(lineStep * 4);
+          
+          // Получаем параметры искажения для текущей колонки
+          const distortion = verticalDistortionFunction(strip.x, columnX);
+          
+          // Пропускаем некоторые колонки для оптимизации на мобильных
+          if (isMobile && j % 32 !== 0) continue;
+          
+          // Вычисляем RGB-сдвиг с учетом глубины (статичный)
+          const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor * 0.8; // Уменьшаем интенсивность
+          
+          // Применяем эффект RGB-сдвига для вертикальных полос
+          if (j % (isMobile ? 64 : 32) === 0) {
+            // Статичные RGB волны (медленные, предсказуемые)
+            const rgbWaveX = Math.cos(t * 0.2 + columnX * 0.02) * rgbSplitIntensity * 0.5;
+            const rgbWaveY = Math.sin(t * 0.15 + columnX * 0.015) * rgbSplitIntensity * 0.3;
+            
+            // Красный канал
+            ctx.globalAlpha = distortion.alpha * 0.9;
+            ctx.drawImage(
+              video,
+              columnX, segment.startY, columnWidth, segment.height,
+              (columnX + distortion.offsetX + rgbWaveX) * scaleX, 
+              (segment.startY + distortion.offsetY + rgbWaveY) * scaleY, 
+              columnWidth * scaleX, // Убираем случайное масштабирование
+              segment.height * scaleY
+            );
+            
+            // Зелёный канал
+            ctx.globalAlpha = distortion.alpha;
+            ctx.drawImage(
+              video,
+              columnX, segment.startY, columnWidth, segment.height,
+              (columnX + distortion.offsetX) * scaleX, 
+              (segment.startY + distortion.offsetY) * scaleY, 
+              columnWidth * scaleX, 
+              segment.height * scaleY
+            );
+            
+            // Синий канал
+            ctx.globalAlpha = distortion.alpha * 0.9;
+            ctx.drawImage(
+              video,
+              columnX, segment.startY, columnWidth, segment.height,
+              (columnX + distortion.offsetX - rgbWaveX) * scaleX, 
+              (segment.startY + distortion.offsetY - rgbWaveY) * scaleY, 
+              columnWidth * scaleX, // Убираем случайное масштабирование
+              segment.height * scaleY
+            );
+          } else {
+            // Обычная смазанная колонка без случайных эффектов
+            ctx.globalAlpha = distortion.alpha * 0.8;
+            ctx.drawImage(
+              video,
+              columnX, segment.startY, columnWidth, segment.height,
+              (columnX + distortion.offsetX) * scaleX, 
+              (segment.startY + distortion.offsetY) * scaleY, 
+              columnWidth * scaleX, // Убираем случайное масштабирование
+              segment.height * scaleY
+            );
+          }
+        }
+      });
+    });
+  }
   
   // Затем рисуем горизонтальные линии (возвращаем к оригинальному количеству)
   for (let i = 0; i < height; i += lineStep) {
