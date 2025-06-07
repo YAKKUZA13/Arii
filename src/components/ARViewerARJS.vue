@@ -42,7 +42,7 @@
       
       
       <!-- Перемещаем модель после элементов эффекта, чтобы она рендерилась поверх -->
-      <a-entity
+     <!-- <a-entity
         gltf-model="/models/drage.glb"
         scale="0.5 0.5 0.5"
         position="0 0 -4"
@@ -65,7 +65,7 @@
           minScale: 0.3;
           maxScale: 2;"
         @model-loaded="onModelLoaded"
-      ></a-entity>
+      ></a-entity>-->
       
       <a-entity
         id="placed-model"
@@ -739,7 +739,154 @@ let effectStartTime = null;
 let effectIntensity = 0; // От 0 до 1
 const TRANSITION_DURATION = 3000; // 3 секунды в миллисекундах
 
-// Функция для обновления интенсивности эффекта
+// Datamoshing система
+let datamoshFrameBuffer = [];
+let previousFrameData = null;
+let motionVectors = [];
+const FRAME_BUFFER_SIZE = 5; // Храним последние 5 кадров
+let datamoshCanvas = null;
+let datamoshCtx = null;
+
+// Кэш для оптимизации
+let randomCache = [];
+let trigCache = [];
+let frameCounter = 0;
+const RANDOM_CACHE_SIZE = 1000;
+const TRIG_CACHE_SIZE = 360;
+
+// Переменные для оптимизации
+let lastCanvasUpdate = 0;
+let skipFrames = 0;
+const CANVAS_UPDATE_INTERVAL = 16; // ~60fps
+const MOBILE_UPDATE_INTERVAL = 33; // ~30fps для мобильных
+
+function initOptimizationCaches() {
+  if (randomCache.length === 0) {
+    // Предгенерируем случайные числа
+    for (let i = 0; i < RANDOM_CACHE_SIZE; i++) {
+      randomCache.push(Math.random());
+    }
+    
+    // Предвычисляем тригонометрические функции
+    for (let i = 0; i < TRIG_CACHE_SIZE; i++) {
+      const angle = (i / TRIG_CACHE_SIZE) * Math.PI * 2;
+      trigCache.push({
+        sin: Math.sin(angle),
+        cos: Math.cos(angle)
+      });
+    }
+  }
+}
+
+function fastRandom(index) {
+  return randomCache[index % RANDOM_CACHE_SIZE];
+}
+
+function fastSin(value) {
+  const index = Math.floor((value % (Math.PI * 2)) / (Math.PI * 2) * TRIG_CACHE_SIZE);
+  return trigCache[index % TRIG_CACHE_SIZE].sin;
+}
+
+function fastCos(value) {
+  const index = Math.floor((value % (Math.PI * 2)) / (Math.PI * 2) * TRIG_CACHE_SIZE);
+  return trigCache[index % TRIG_CACHE_SIZE].cos;
+}
+
+function initDatamoshCanvas() {
+  if (!datamoshCanvas) {
+    datamoshCanvas = document.createElement('canvas');
+    datamoshCtx = datamoshCanvas.getContext('2d', { willReadFrequently: true });
+  }
+}
+
+function calculateMotionVectors(currentImageData, previousImageData, x, y, width, height) {
+  const vectors = [];
+  const blockSize = 8; // Размер блока для анализа движения
+  
+  if (!previousImageData) return vectors;
+  
+  for (let by = 0; by < height; by += blockSize) {
+    for (let bx = 0; bx < width; bx += blockSize) {
+      const currentBlock = getBlock(currentImageData, x + bx, y + by, blockSize, width);
+      const bestMatch = findBestMatch(currentBlock, previousImageData, x + bx, y + by, blockSize, width, height);
+      
+      vectors.push({
+        x: bx,
+        y: by,
+        dx: bestMatch.dx,
+        dy: bestMatch.dy,
+        confidence: bestMatch.confidence
+      });
+    }
+  }
+  
+  return vectors;
+}
+
+function getBlock(imageData, startX, startY, blockSize, canvasWidth) {
+  const block = [];
+  const data = imageData.data;
+  
+  for (let y = 0; y < blockSize; y++) {
+    for (let x = 0; x < blockSize; x++) {
+      const pixelIndex = ((startY + y) * canvasWidth + (startX + x)) * 4;
+      if (pixelIndex < data.length) {
+        block.push({
+          r: data[pixelIndex],
+          g: data[pixelIndex + 1],
+          b: data[pixelIndex + 2],
+          a: data[pixelIndex + 3]
+        });
+      }
+    }
+  }
+  
+  return block;
+}
+
+function findBestMatch(block, imageData, centerX, centerY, blockSize, canvasWidth, canvasHeight) {
+  let bestMatch = { dx: 0, dy: 0, confidence: 0 };
+  let minError = Infinity;
+  const searchRange = 16; // Радиус поиска
+  
+  for (let dy = -searchRange; dy <= searchRange; dy += 2) {
+    for (let dx = -searchRange; dx <= searchRange; dx += 2) {
+      const newX = centerX + dx;
+      const newY = centerY + dy;
+      
+      if (newX >= 0 && newY >= 0 && newX + blockSize < canvasWidth && newY + blockSize < canvasHeight) {
+        const compareBlock = getBlock(imageData, newX, newY, blockSize, canvasWidth);
+        const error = calculateBlockError(block, compareBlock);
+        
+        if (error < minError) {
+          minError = error;
+          bestMatch = { 
+            dx: dx, 
+            dy: dy, 
+            confidence: Math.max(0, 1 - (error / (blockSize * blockSize * 255)))
+          };
+        }
+      }
+    }
+  }
+  
+  return bestMatch;
+}
+
+function calculateBlockError(block1, block2) {
+  let error = 0;
+  const minLength = Math.min(block1.length, block2.length);
+  
+  for (let i = 0; i < minLength; i++) {
+    const p1 = block1[i] || { r: 0, g: 0, b: 0 };
+    const p2 = block2[i] || { r: 0, g: 0, b: 0 };
+    
+    error += Math.abs(p1.r - p2.r) + Math.abs(p1.g - p2.g) + Math.abs(p1.b - p2.b);
+  }
+  
+  return error;
+}
+
 function updateEffectIntensity() {
   if (effectStartTime === null) {
     // Эффект еще не начался
@@ -760,27 +907,188 @@ function updateEffectIntensity() {
   }
 }
 
-// Функция для генерации статичных вертикальных полос
+function applyDatamoshingEffect(ctx, video, x, y, width, height, scaleX, scaleY, intensity) {
+  initDatamoshCanvas();
+  
+  // Настраиваем размер datamosh canvas
+  if (datamoshCanvas.width !== width || datamoshCanvas.height !== height) {
+    datamoshCanvas.width = width;
+    datamoshCanvas.height = height;
+  }
+  
+  // Копируем текущий кадр
+  datamoshCtx.drawImage(video, x, y, width, height, 0, 0, width, height);
+  const currentImageData = datamoshCtx.getImageData(0, 0, width, height);
+  
+  // Вычисляем motion vectors если есть предыдущий кадр
+  if (previousFrameData && intensity > 0.2) {
+    motionVectors = calculateMotionVectors(currentImageData, previousFrameData, 0, 0, width, height);
+  }
+  
+  // Добавляем кадр в буфер
+  datamoshFrameBuffer.push({
+    imageData: currentImageData,
+    timestamp: performance.now()
+  });
+  
+  // Ограничиваем размер буфера
+  if (datamoshFrameBuffer.length > FRAME_BUFFER_SIZE) {
+    datamoshFrameBuffer.shift();
+  }
+  
+  // Применяем datamoshing эффекты
+  if (intensity > 0 && datamoshFrameBuffer.length > 1) {
+    applyMotionCompensation(datamoshCtx, width, height, intensity);
+    applyCompressionArtifacts(datamoshCtx, width, height, intensity);
+    applyFrameBlending(datamoshCtx, width, height, intensity);
+  }
+  
+  // Рисуем результат на основной canvas
+  ctx.globalAlpha = Math.min(1, intensity * 1.2);
+  ctx.drawImage(
+    datamoshCanvas,
+    0, 0, width, height,
+    x * scaleX, y * scaleY, width * scaleX, height * scaleY
+  );
+  ctx.globalAlpha = 1;
+  
+  // Сохраняем текущий кадр как предыдущий
+  previousFrameData = currentImageData;
+}
+
+function applyMotionCompensation(ctx, width, height, intensity) {
+  if (motionVectors.length === 0) return;
+  
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const newData = new Uint8ClampedArray(data);
+  
+  motionVectors.forEach(vector => {
+    if (vector.confidence > 0.3 && (Math.abs(vector.dx) > 2 || Math.abs(vector.dy) > 2)) {
+      // Создаем эффект "размазывания" пикселей в направлении движения
+      const steps = Math.floor(intensity * 8 + 2);
+      const stepX = vector.dx / steps;
+      const stepY = vector.dy / steps;
+      
+      for (let step = 0; step < steps; step++) {
+        const sourceX = Math.floor(vector.x + stepX * step);
+        const sourceY = Math.floor(vector.y + stepY * step);
+        const targetX = Math.floor(vector.x + vector.dx * intensity);
+        const targetY = Math.floor(vector.y + vector.dy * intensity);
+        
+        if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height &&
+            targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {
+          
+          const sourceIndex = (sourceY * width + sourceX) * 4;
+          const targetIndex = (targetY * width + targetX) * 4;
+          
+          // Смешиваем пиксели с затуханием
+          const alpha = (1 - step / steps) * intensity * vector.confidence;
+          newData[targetIndex] = Math.floor(newData[targetIndex] * (1 - alpha) + data[sourceIndex] * alpha);
+          newData[targetIndex + 1] = Math.floor(newData[targetIndex + 1] * (1 - alpha) + data[sourceIndex + 1] * alpha);
+          newData[targetIndex + 2] = Math.floor(newData[targetIndex + 2] * (1 - alpha) + data[sourceIndex + 2] * alpha);
+        }
+      }
+    }
+  });
+  
+  const newImageData = new ImageData(newData, width, height);
+  ctx.putImageData(newImageData, 0, 0);
+}
+
+function applyCompressionArtifacts(ctx, width, height, intensity) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const blockSize = 8;
+  
+  // DCT-подобные артефакты (блочность)
+  for (let y = 0; y < height; y += blockSize) {
+    for (let x = 0; x < width; x += blockSize) {
+      if (Math.random() < intensity * 0.3) {
+        // Случайные блочные артефакты
+        const avgR = getBlockAverage(data, x, y, blockSize, width, height, 0);
+        const avgG = getBlockAverage(data, x, y, blockSize, width, height, 1);
+        const avgB = getBlockAverage(data, x, y, blockSize, width, height, 2);
+        
+        // Добавляем квантизацию
+        const quantLevel = Math.floor(8 - intensity * 6);
+        const quantR = Math.floor(avgR / quantLevel) * quantLevel;
+        const quantG = Math.floor(avgG / quantLevel) * quantLevel;
+        const quantB = Math.floor(avgB / quantLevel) * quantLevel;
+        
+        // Применяем к блоку
+        for (let by = 0; by < blockSize && y + by < height; by++) {
+          for (let bx = 0; bx < blockSize && x + bx < width; bx++) {
+            const index = ((y + by) * width + (x + bx)) * 4;
+            const blendFactor = intensity * 0.7;
+            data[index] = Math.floor(data[index] * (1 - blendFactor) + quantR * blendFactor);
+            data[index + 1] = Math.floor(data[index + 1] * (1 - blendFactor) + quantG * blendFactor);
+            data[index + 2] = Math.floor(data[index + 2] * (1 - blendFactor) + quantB * blendFactor);
+          }
+        }
+      }
+    }
+  }
+  
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function getBlockAverage(data, startX, startY, blockSize, width, height, colorChannel) {
+  let sum = 0;
+  let count = 0;
+  
+  for (let y = 0; y < blockSize && startY + y < height; y++) {
+    for (let x = 0; x < blockSize && startX + x < width; x++) {
+      const index = ((startY + y) * width + (startX + x)) * 4 + colorChannel;
+      sum += data[index];
+      count++;
+    }
+  }
+  
+  return count > 0 ? sum / count : 0;
+}
+
+function applyFrameBlending(ctx, width, height, intensity) {
+  if (datamoshFrameBuffer.length < 2) return;
+  
+  const currentFrame = datamoshFrameBuffer[datamoshFrameBuffer.length - 1];
+  const prevFrame = datamoshFrameBuffer[datamoshFrameBuffer.length - 2];
+  
+  const currentData = currentFrame.imageData.data;
+  const prevData = prevFrame.imageData.data;
+  const blendedData = new Uint8ClampedArray(currentData);
+  
+  // Создаем эффект "привидений" от предыдущих кадров
+  const ghostIntensity = intensity * 0.4;
+  
+  for (let i = 0; i < currentData.length; i += 4) {
+    // Смешиваем с предыдущим кадром
+    blendedData[i] = Math.floor(currentData[i] * (1 - ghostIntensity) + prevData[i] * ghostIntensity);
+    blendedData[i + 1] = Math.floor(currentData[i + 1] * (1 - ghostIntensity) + prevData[i + 1] * ghostIntensity);
+    blendedData[i + 2] = Math.floor(currentData[i + 2] * (1 - ghostIntensity) + prevData[i + 2] * ghostIntensity);
+    blendedData[i + 3] = currentData[i + 3]; // Сохраняем альфа-канал
+  }
+  
+  const blendedImageData = new ImageData(blendedData, width, height);
+  ctx.putImageData(blendedImageData, 0, 0);
+}
+
 function generateStaticVerticalStrips(x, y, width, height, lineStep) {
-  const verticalStripWidth = lineStep * 225; // ширина вертикальных полос
+  const verticalStripWidth = lineStep * 225;
   const verticalStrips = [];
-  const numVerticalStrips = Math.floor(width / (verticalStripWidth * 1.5)); // Больше полос, но они уже не занимают всю высоту
+  const numVerticalStrips = Math.floor(width / (verticalStripWidth * 1.5));
   
   for (let i = 0; i < numVerticalStrips; i++) {
-    // Случайная позиция для вертикальной полосы
     const stripX = x + Math.random() * (width - verticalStripWidth);
     
-    if (Math.random() > 0.5) { // 50% шанс появления вертикальной полосы
-      // Создаем сегменты разной высоты внутри одной вертикальной полосы
+    if (Math.random() > 0.5) {
       const segments = [];
       let currentY = y;
       
       while (currentY < y + height) {
-        // Случайная высота сегмента (от 20% до 80% от общей высоты)
         const segmentHeight = Math.random() * (height * 0.6) + (height * 0.2);
         const segmentEndY = Math.min(currentY + segmentHeight, y + height);
         
-        // 60% шанс что сегмент будет нарисован (создаем разрывы)
         if (Math.random() > 0.4) {
           segments.push({
             startY: currentY,
@@ -789,7 +1097,6 @@ function generateStaticVerticalStrips(x, y, width, height, lineStep) {
           });
         }
         
-        // Добавляем случайный промежуток между сегментами
         const gap = Math.random() * (height * 0.3) + (height * 0.1);
         currentY = segmentEndY + gap;
       }
@@ -811,327 +1118,147 @@ function syncOverlayCanvas() {
   const canvas = overlayCanvas.value
   const aframeCanvas = document.querySelector('a-scene canvas')
   if (!canvas || !aframeCanvas) return
+  
   const rect = aframeCanvas.getBoundingClientRect()
-  lastRect = rect
-  canvas.style.position = 'fixed'
-  canvas.style.left = rect.left + 'px'
-  canvas.style.top = rect.top + 'px'
-  canvas.width = rect.width
-  canvas.height = rect.height
-  canvas.style.width = rect.width + 'px'
-  canvas.style.height = rect.height + 'px'
-  canvas.style.pointerEvents = 'none'
-  canvas.style.zIndex = 3
+  
+  // Оптимизация: обновляем размеры только если они изменились
+  if (!lastRect || 
+      lastRect.width !== rect.width || 
+      lastRect.height !== rect.height ||
+      lastRect.left !== rect.left ||
+      lastRect.top !== rect.top) {
+    
+    lastRect = rect
+    canvas.style.position = 'fixed'
+    canvas.style.left = rect.left + 'px'
+    canvas.style.top = rect.top + 'px'
+    canvas.width = rect.width
+    canvas.height = rect.height
+    canvas.style.width = rect.width + 'px'
+    canvas.style.height = rect.height + 'px'
+    canvas.style.pointerEvents = 'none'
+    canvas.style.zIndex = 3
+  }
 }
 
 function drawOverlay() {
+  const now = performance.now();
+  const isMobile = window.innerWidth < 768;
+  const updateInterval = isMobile ? MOBILE_UPDATE_INTERVAL : CANVAS_UPDATE_INTERVAL;
+  
+  // Throttling для оптимизации производительности
+  if (now - lastCanvasUpdate < updateInterval) {
+    return;
+  }
+  lastCanvasUpdate = now;
+  
   syncOverlayCanvas();
   const canvas = overlayCanvas.value;
   if (!canvas || !lastRect) return;
+  
   const ctx = canvas.getContext('2d');
+  
+  // Оптимизация: очищаем только если есть что рисовать
+  const hasDetectedObjects = detectedBoxes.value.length > 0;
+  
+  if (!hasDetectedObjects && effectIntensity === 0) {
+    // Если нет объектов и эффект не активен, просто очищаем канвас
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+  
+  // Эффективная очистка канваса
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
   const scaleX = canvas.width / 1280;
   const scaleY = canvas.height / 720;
   const video = document.querySelector('video');
   const t = glitchTime / 1000;
-  
-  // Определяем, находимся ли мы на мобильном устройстве
-  const isMobile = window.innerWidth < 768;
 
-  // Проверяем, есть ли обнаруженные объекты
-  if (detectedBoxes.value.length > 0) {
-    // Запускаем эффект при первом обнаружении объекта
+  // Управление эффектом
+  if (hasDetectedObjects) {
     if (effectStartTime === null) {
       effectStartTime = performance.now();
     }
   } else {
-    // Сбрасываем эффект если объекты исчезли
     effectStartTime = null;
     effectIntensity = 0;
+    // Легкая очистка datamosh буферов только при необходимости
+    if (datamoshFrameBuffer.length > 0) {
+      datamoshFrameBuffer = [];
+      previousFrameData = null;
+    }
+    return; // Выходим рано, если нет объектов
   }
   
-  // Обновляем интенсивность эффекта
   updateEffectIntensity();
   
-  // Если эффект еще не начался или интенсивность = 0, ничего не рисуем
   if (effectIntensity === 0) {
-    return;
+    return; // Выходим рано, если эффект не активен
   }
 
-  detectedBoxes.value.forEach((box, boxIdx) => { // максимум 1 объект
-    // Получаем исходные координаты и размеры
-    let [x, y, w, h] = box.bbox;
-    
-    // Корректировка смещения в зависимости от устройства
-    if (isMobile) {
-      // На мобильных устройствах меньшее смещение
-      x += 330;
-    } else {
-      // На десктопе оставляем прежнее смещение
-      x -= 120;
-    }
-    
-    if (video && video.readyState === 4) {
-      // Рисуем глитч-эффект с текущей интенсивностью
-      drawGlitchOnFace(ctx, video, x, y, w, h, t, scaleX, scaleY, x + w/2, y + h/2, 'front', isMobile);
-    }
-  });
+  // Оптимизация: обрабатываем только первый объект для производительности
+  const box = detectedBoxes.value[0];
+  if (!box || !video || video.readyState !== 4) return;
+  
+  let [x, y, w, h] = box.bbox;
+  
+  // Корректировка смещения
+  if (isMobile) {
+    x += 330;
+  } else {
+    x -= 120;
+  }
+  
+  // Вызываем оптимизированную функцию глитча
+  drawHybridGlitchEffect(ctx, video, x, y, w, h, t, scaleX, scaleY, x + w/2, y + h/2, 'front', isMobile);
 }
 
-// Функция для рисования эффекта глюка на указанной грани
-function drawGlitchOnFace(ctx, video, x, y, width, height, time, scaleX, scaleY, centerX, centerY, face, isMobile = false) {
-  const t = time;
-  
-  // Настраиваем интенсивность эффектов в зависимости от устройства и анимации перехода
-  const deviceFactor = isMobile ? 0.7 : 1;
-  const intensity = deviceFactor * effectIntensity; // Применяем интенсивность перехода
-  
-  // Если интенсивность слишком мала, ничего не рисуем
-  if (intensity < 0.01) return;
-  
-  // Параметры перспективы
-  const perspectiveOriginX = window.innerWidth / 2;
-  const perspectiveOriginY = window.innerHeight / 2;
-  const maxPerspectiveShift = 20 * deviceFactor;
-  
-  // Вычисляем относительное положение объекта от центра экрана
-  const relativeX = (centerX - perspectiveOriginX) / perspectiveOriginX;
-  const relativeY = (centerY - perspectiveOriginY) / perspectiveOriginY;
-  
-  // Создаем эффект параллакса на основе положения
-  const parallaxX = relativeX * maxPerspectiveShift;
-  const parallaxY = relativeY * maxPerspectiveShift;
-  
-  // Адаптивный шаг для строк эффекта
-  const lineStep = isMobile ? 5 : 2;
-  
-  // Проверяем, изменились ли размеры/позиция bbox - если да, то пересоздаем вертикальные полосы
-  const currentBBoxString = `${x}_${y}_${width}_${height}`;
-  if (lastBBoxString !== currentBBoxString) {
-    staticVerticalStrips = generateStaticVerticalStrips(x, y, width, height, lineStep);
-    lastBBoxString = currentBBoxString;
-  }
-  
-  // Функция искажения с учетом 3D эффекта для горизонтальных полос
-  const distortionFunction = (i, lineY) => {
-    // Вычисляем расстояние от центра для создания эффекта глубины
-    const distFromCenterX = (x + width/2 - centerX) / width;
-    const distFromCenterY = (lineY - centerY) / height;
-    const distFromCenter = Math.sqrt(distFromCenterX * distFromCenterX + distFromCenterY * distFromCenterY);
-    
-    // Создаем эффект глубины
-    const depthFactor = 1 - distFromCenter * 0.5;
-    
-    // Добавляем волновой эффект для создания ощущения объема
-    const waveX = Math.sin(t * 2 + lineY * 0.05) * 15 * intensity * depthFactor;
-    const waveY = Math.cos(t * 3 + lineY * 0.03) * 10 * intensity * depthFactor;
-    
-    // Добавляем случайное смещение с учетом глубины
-    const randomX = (Math.random() - 0.5) * 30 * intensity * depthFactor;
-    const randomY = (Math.random() - 0.5) * 20 * intensity * depthFactor;
-    
-    // Комбинируем все эффекты смещения
-    const totalOffsetX = waveX + randomX + parallaxX * depthFactor;
-    const totalOffsetY = waveY + randomY + parallaxY * depthFactor;
-    
-    // Создаем пульсацию прозрачности для эффекта голограммы
-    const pulseAlpha = 0.6 + 0.2 * Math.sin(t * 4 + distFromCenter * 5);
-    
-    // Добавляем шум к прозрачности для создания эффекта помех
-    const noiseAlpha = Math.random() * 0.3 * depthFactor;
-    
-    return {
-      offsetX: totalOffsetX,
-      offsetY: totalOffsetY,
-      alpha: (pulseAlpha + noiseAlpha) * intensity * depthFactor,
-      depthFactor: depthFactor
-    };
-  };
-  
-  // Функция искажения для вертикальных полос (статичная версия)
-  const verticalDistortionFunction = (stripX, columnX) => {
-    const distFromCenterX = (columnX - centerX) / width;
-    const distFromCenterY = (y + height/2 - centerY) / height;
-    const distFromCenter = Math.sqrt(distFromCenterX * distFromCenterX + distFromCenterY * distFromCenterY);
-    
-    const depthFactor = 1 - distFromCenter * 0.3;
-    
-    // Убираем случайные искажения, оставляем только плавные time-based эффекты
-    const waveX = Math.cos(t * 0.3 + columnX * 0.01) * 5 * intensity * depthFactor; // Медленные, небольшие волны
-    const waveY = Math.sin(t * 0.4 + columnX * 0.01) * 3 * intensity * depthFactor;
-    
-    // Убираем случайные смещения
-    const totalOffsetX = waveX + parallaxX * depthFactor;
-    const totalOffsetY = waveY + parallaxY * depthFactor;
-    
-    // Статичная прозрачность без случайного шума
-    const pulseAlpha = 0.7 + 0.1 * Math.cos(t * 0.5 + distFromCenter * 2); // Медленная пульсация
-    
-    return {
-      offsetX: totalOffsetX,
-      offsetY: totalOffsetY,
-      alpha: pulseAlpha * intensity * depthFactor,
-      depthFactor: depthFactor
-    };
-  };
-  
-  // Базовая интенсивность RGB-сдвига
-  const baseRgbSplit = 8 * intensity; // Применяем интенсивность к RGB-сдвигу
-  
-  // Рисуем статичные вертикальные полосы (только если интенсивность достаточна)
-  if (effectIntensity > 0.3) { // Вертикальные полосы появляются после 30% перехода
-    staticVerticalStrips.forEach(strip => {
-      // Рисуем каждый сегмент полосы отдельно
-      strip.segments.forEach(segment => {
-        for (let j = 0; j < strip.width; j += Math.ceil(lineStep * 4)) {
-          const columnX = strip.x + j;
-          const columnWidth = Math.ceil(lineStep * 4);
-          
-          // Получаем параметры искажения для текущей колонки
-          const distortion = verticalDistortionFunction(strip.x, columnX);
-          
-          // Пропускаем некоторые колонки для оптимизации на мобильных
-          if (isMobile && j % 32 !== 0) continue;
-          
-          // Вычисляем RGB-сдвиг с учетом глубины (статичный)
-          const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor * 0.8; // Уменьшаем интенсивность
-          
-          // Применяем эффект RGB-сдвига для вертикальных полос
-          if (j % (isMobile ? 64 : 32) === 0) {
-            // Статичные RGB волны (медленные, предсказуемые)
-            const rgbWaveX = Math.cos(t * 0.2 + columnX * 0.02) * rgbSplitIntensity * 0.5;
-            const rgbWaveY = Math.sin(t * 0.15 + columnX * 0.015) * rgbSplitIntensity * 0.3;
-            
-            // Красный канал
-            ctx.globalAlpha = distortion.alpha * 0.9;
-            ctx.drawImage(
-              video,
-              columnX, segment.startY, columnWidth, segment.height,
-              (columnX + distortion.offsetX + rgbWaveX) * scaleX, 
-              (segment.startY + distortion.offsetY + rgbWaveY) * scaleY, 
-              columnWidth * scaleX, // Убираем случайное масштабирование
-              segment.height * scaleY
-            );
-            
-            // Зелёный канал
-            ctx.globalAlpha = distortion.alpha;
-            ctx.drawImage(
-              video,
-              columnX, segment.startY, columnWidth, segment.height,
-              (columnX + distortion.offsetX) * scaleX, 
-              (segment.startY + distortion.offsetY) * scaleY, 
-              columnWidth * scaleX, 
-              segment.height * scaleY
-            );
-            
-            // Синий канал
-            ctx.globalAlpha = distortion.alpha * 0.9;
-            ctx.drawImage(
-              video,
-              columnX, segment.startY, columnWidth, segment.height,
-              (columnX + distortion.offsetX - rgbWaveX) * scaleX, 
-              (segment.startY + distortion.offsetY - rgbWaveY) * scaleY, 
-              columnWidth * scaleX, // Убираем случайное масштабирование
-              segment.height * scaleY
-            );
-          } else {
-            // Обычная смазанная колонка без случайных эффектов
-            ctx.globalAlpha = distortion.alpha * 0.8;
-            ctx.drawImage(
-              video,
-              columnX, segment.startY, columnWidth, segment.height,
-              (columnX + distortion.offsetX) * scaleX, 
-              (segment.startY + distortion.offsetY) * scaleY, 
-              columnWidth * scaleX, // Убираем случайное масштабирование
-              segment.height * scaleY
-            );
-          }
-        }
-      });
-    });
-  }
-  
-  // Затем рисуем горизонтальные линии (возвращаем к оригинальному количеству)
-  for (let i = 0; i < height; i += lineStep) {
-    const lineY = y + i;
-    const lineHeight = lineStep;
-    
-    // Получаем параметры искажения для текущей линии
-    const distortion = distortionFunction(i, lineY);
-    
-    // Пропускаем некоторые строки для оптимизации на мобильных
-    if (isMobile && i % 10 !== 0) continue;
-    
-    // Вычисляем RGB-сдвиг с учетом глубины
-    const rgbSplitIntensity = baseRgbSplit * distortion.depthFactor;
-    
-    // Применяем эффект RGB-сдвига с переменной интенсивностью
-    if (i % (isMobile ? 24 : 12) === 0) {
-      // Добавляем волновое искажение для RGB каналов
-      const rgbWaveX = Math.sin(t * 3 + lineY * 0.02) * rgbSplitIntensity;
-      const rgbWaveY = Math.cos(t * 2 + lineY * 0.03) * rgbSplitIntensity;
-      
-      // Красный канал
-      ctx.globalAlpha = distortion.alpha * 0.7;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX + rgbWaveX) * scaleX, 
-        (lineY + distortion.offsetY + rgbWaveY) * scaleY, 
-        width * scaleX * (1 + distortion.depthFactor * 0.05), 
-        lineHeight * scaleY
-      );
-      
-      // Зелёный канал
-      ctx.globalAlpha = distortion.alpha * 0.8;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX) * scaleX, 
-        (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX, 
-        lineHeight * scaleY
-      );
-      
-      // Синий канал
-      ctx.globalAlpha = distortion.alpha * 0.7;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX - rgbWaveX) * scaleX, 
-        (lineY + distortion.offsetY - rgbWaveY) * scaleY, 
-        width * scaleX * (1 - distortion.depthFactor * 0.05), 
-        lineHeight * scaleY
-      );
-    } else {
-      // Обычная смазанная полоса с эффектом глубины
-      ctx.globalAlpha = distortion.alpha * 0.8;
-      ctx.drawImage(
-        video,
-        x, lineY, width, lineHeight,
-        (x + distortion.offsetX) * scaleX, 
-        (lineY + distortion.offsetY) * scaleY, 
-        width * scaleX * (1 + (Math.random() - 0.5) * 0.1 * distortion.depthFactor), 
-        lineHeight * scaleY
-      );
-    }
-  }
-}
-
+// Оптимизированный цикл анимации
 function glitchOverlayLoop() {
   glitchTime = performance.now();
-  drawOverlay();
+  
+  // Адаптивный FPS на основе производительности устройства
+  const isMobile = window.innerWidth < 768;
+  const targetFPS = isMobile ? 30 : 60;
+  const frameInterval = 1000 / targetFPS;
+  
+  // Вызываем drawOverlay только если прошло достаточно времени
+  if (glitchTime - (window.lastOverlayDraw || 0) >= frameInterval) {
+    drawOverlay();
+    window.lastOverlayDraw = glitchTime;
+  }
+  
   glitchAnimFrame = requestAnimationFrame(glitchOverlayLoop);
 }
 
 onMounted(() => {
   window.addEventListener('resize', handleResize)
+  
+  // Инициализируем кэши при загрузке
+  initOptimizationCaches();
+  
   setTimeout(drawOverlay, 1000) // на случай, если canvas появляется с задержкой
   glitchOverlayLoop();
 })
+
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
   if (glitchAnimFrame) cancelAnimationFrame(glitchAnimFrame);
+  
+  // Очищаем все кэши и ресурсы
+  randomCache = [];
+  trigCache = [];
+  datamoshFrameBuffer = [];
+  previousFrameData = null;
+  
+  // Очищаем canvas
+  if (datamoshCanvas) {
+    datamoshCanvas.width = 0;
+    datamoshCanvas.height = 0;
+    datamoshCanvas = null;
+    datamoshCtx = null;
+  }
 })
 
 // Следим за изменениями bbox и обновляем canvas
@@ -1183,49 +1310,220 @@ function onModelLoaded(evt) {
   }
 }
 
-// --- ribbons-effect: 3D ленты из bbox ---
-AFRAME.registerComponent('ribbons-effect', {
-  schema: {},
-  init: function () {
-    this.ribbonMesh = null;
-    this.lastBBox = '';
-  },
-  tick: function () {
-    const boxes = window.__vueDetectedBoxes || [];
-    const video = document.querySelector('video');
-    if (boxes.length && video && video.readyState === 4) {
-      const bboxStr = boxes[0].bbox.toString();
-      if (!this.ribbonMesh || this.lastBBox !== bboxStr) {
-        if (this.ribbonMesh) {
-          this.el.sceneEl.object3D.remove(this.ribbonMesh);
-          this.ribbonMesh.geometry.dispose();
-          if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
-          this.ribbonMesh.material.dispose();
+// Оптимизированная гибридная функция глитч + datamoshing
+function drawHybridGlitchEffect(ctx, video, x, y, width, height, time, scaleX, scaleY, centerX, centerY, face, isMobile = false) {
+  initOptimizationCaches();
+  frameCounter++;
+  
+  // Периодическая очистка ресурсов
+  cleanupGlitchResources();
+  
+  const t = time;
+  const deviceFactor = isMobile ? 0.7 : 1;
+  const intensity = deviceFactor * effectIntensity;
+  
+  if (intensity < 0.01) return;
+  
+  // Применяем motion blur только каждый 2-й кадр для оптимизации
+  if (effectIntensity > 0.4 && frameCounter % 2 === 0) {
+    applyOptimizedMotionBlur(ctx, video, x, y, width, height, scaleX, scaleY, intensity);
+  }
+  
+  // Предвычисляем константы
+  const perspectiveOriginX = window.innerWidth / 2;
+  const perspectiveOriginY = window.innerHeight / 2;
+  const maxPerspectiveShift = 20 * deviceFactor;
+  const relativeX = (centerX - perspectiveOriginX) / perspectiveOriginX;
+  const relativeY = (centerY - perspectiveOriginY) / perspectiveOriginY;
+  const parallaxX = relativeX * maxPerspectiveShift;
+  const parallaxY = relativeY * maxPerspectiveShift;
+  const lineStep = isMobile ? 5 : 2;
+  const baseRgbSplit = 8 * intensity * (1 + effectIntensity * 0.5);
+  
+  // Предвычисляем массив искажений для оптимизации
+  const distortions = [];
+  const numLines = Math.floor(height / lineStep);
+  
+  for (let i = 0; i < numLines; i++) {
+    const lineY = y + i * lineStep;
+    const distFromCenterX = (x + width/2 - centerX) / width;
+    const distFromCenterY = (lineY - centerY) / height;
+    const distFromCenter = Math.sqrt(distFromCenterX * distFromCenterX + distFromCenterY * distFromCenterY);
+    const depthFactor = 1 - distFromCenter * 0.5;
+    
+    // Используем кэшированные тригонометрические функции
+    const waveX = fastSin(t * 2 + lineY * 0.05) * 15 * intensity * depthFactor;
+    const waveY = fastCos(t * 3 + lineY * 0.03) * 10 * intensity * depthFactor;
+    const compressionDistortion = fastSin(t * 0.5 + i * 0.1) * intensity * 5;
+    
+    // Используем кэшированные случайные числа
+    const randomIndex = (frameCounter + i) % RANDOM_CACHE_SIZE;
+    const randomX = (fastRandom(randomIndex) - 0.5) * 30 * intensity * depthFactor + compressionDistortion;
+    const randomY = (fastRandom((randomIndex + 1) % RANDOM_CACHE_SIZE) - 0.5) * 20 * intensity * depthFactor;
+    
+    const totalOffsetX = waveX + randomX + parallaxX * depthFactor;
+    const totalOffsetY = waveY + randomY + parallaxY * depthFactor;
+    
+    const pulseAlpha = 0.6 + 0.2 * fastSin(t * 4 + distFromCenter * 5);
+    const noiseAlpha = fastRandom((randomIndex + 2) % RANDOM_CACHE_SIZE) * 0.3 * depthFactor;
+    
+    distortions.push({
+      offsetX: totalOffsetX,
+      offsetY: totalOffsetY,
+      alpha: (pulseAlpha + noiseAlpha) * intensity * depthFactor,
+      depthFactor: depthFactor,
+      rgbSplitIntensity: baseRgbSplit * depthFactor
+    });
+  }
+  
+  // Оптимизированная отрисовка горизонтальных линий
+  ctx.save();
+  
+  for (let i = 0; i < numLines; i++) {
+    // Пропускаем некоторые строки для оптимизации
+    if (isMobile && i % 10 !== 0) continue;
+    
+    const lineY = y + i * lineStep;
+    const lineHeight = lineStep;
+    const distortion = distortions[i];
+    
+    // Оптимизация: группируем drawImage вызовы
+    const isCompressedLine = (i % 16 === 0) && (fastRandom((frameCounter + i + 10) % RANDOM_CACHE_SIZE) < intensity * 0.3);
+    const isRGBLine = i % (isMobile ? 24 : 12) === 0 || isCompressedLine;
+    
+    if (isRGBLine) {
+      const rgbWaveX = fastSin(t * 3 + lineY * 0.02) * distortion.rgbSplitIntensity;
+      const rgbWaveY = fastCos(t * 2 + lineY * 0.03) * distortion.rgbSplitIntensity;
+      const compressionFactor = isCompressedLine ? 2 : 1;
+      
+      // Батчинг RGB каналов
+      const rgbOperations = [
+        {
+          alpha: distortion.alpha * 0.7,
+          offsetX: distortion.offsetX + rgbWaveX * compressionFactor,
+          offsetY: distortion.offsetY + rgbWaveY,
+          scaleX: 1 + distortion.depthFactor * 0.05 * compressionFactor
+        },
+        {
+          alpha: distortion.alpha * 0.8,
+          offsetX: distortion.offsetX,
+          offsetY: distortion.offsetY,
+          scaleX: 1
+        },
+        {
+          alpha: distortion.alpha * 0.7,
+          offsetX: distortion.offsetX - rgbWaveX * compressionFactor,
+          offsetY: distortion.offsetY - rgbWaveY,
+          scaleX: 1 - distortion.depthFactor * 0.05 * compressionFactor
         }
-        // import('./ar-ribbons.js').then(({ createRibbonFromBBox }) => {
-        //   this.ribbonMesh = createRibbonFromBBox(boxes[0].bbox, video, this.el.sceneEl.object3D);
-        //   this.lastBBox = bboxStr;
-        // });
-      }
-    } else if (this.ribbonMesh) {
-      this.el.sceneEl.object3D.remove(this.ribbonMesh);
-      this.ribbonMesh.geometry.dispose();
-      if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
-      this.ribbonMesh.material.dispose();
-      this.ribbonMesh = null;
-      this.lastBBox = '';
-    }
-  },
-  remove: function () {
-    if (this.ribbonMesh) {
-      this.el.sceneEl.object3D.remove(this.ribbonMesh);
-      this.ribbonMesh.geometry.dispose();
-      if (this.ribbonMesh.material.map) this.ribbonMesh.material.map.dispose();
-      this.ribbonMesh.material.dispose();
-      this.ribbonMesh = null;
+      ];
+      
+      // Выполняем все RGB операции подряд
+      rgbOperations.forEach(op => {
+        ctx.globalAlpha = op.alpha;
+        ctx.drawImage(
+          video,
+          x, lineY, width, lineHeight,
+          (x + op.offsetX) * scaleX, 
+          (lineY + op.offsetY) * scaleY, 
+          width * scaleX * op.scaleX, 
+          lineHeight * scaleY
+        );
+      });
+    } else {
+      // Обычная линия
+      ctx.globalAlpha = distortion.alpha * 0.8;
+      const randomScale = 1 + (fastRandom((frameCounter + i + 20) % RANDOM_CACHE_SIZE) - 0.5) * 0.1 * distortion.depthFactor;
+      ctx.drawImage(
+        video,
+        x, lineY, width, lineHeight,
+        (x + distortion.offsetX) * scaleX, 
+        (lineY + distortion.offsetY) * scaleY, 
+        width * scaleX * randomScale, 
+        lineHeight * scaleY
+      );
     }
   }
-});
+  
+  ctx.restore();
+  
+  // Вертикальные глитчи только каждый 3-й кадр
+  if (effectIntensity > 0.6 && frameCounter % 3 === 0) {
+    applyOptimizedVerticalGlitches(ctx, video, x, y, width, height, scaleX, scaleY, t, intensity);
+  }
+}
+
+// Оптимизированный motion blur
+function applyOptimizedMotionBlur(ctx, video, x, y, width, height, scaleX, scaleY, intensity) {
+  const blurSteps = Math.min(Math.floor(intensity * 3 + 1), 3); // Ограничиваем максимум 3 шагами
+  const offsetStep = intensity * 4;
+  
+  ctx.save();
+  for (let step = 0; step < blurSteps; step++) {
+    const alpha = (1 - step / blurSteps) * 0.3 * intensity;
+    const randomIndex = (frameCounter + step) % RANDOM_CACHE_SIZE;
+    const offsetX = (fastRandom(randomIndex) - 0.5) * offsetStep * step;
+    const offsetY = (fastRandom((randomIndex + 1) % RANDOM_CACHE_SIZE) - 0.5) * offsetStep * step * 0.5;
+    
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(
+      video,
+      x, y, width, height,
+      (x + offsetX) * scaleX, 
+      (y + offsetY) * scaleY, 
+      width * scaleX, 
+      height * scaleY
+    );
+  }
+  ctx.restore();
+}
+
+// Оптимизированные вертикальные глитчи
+function applyOptimizedVerticalGlitches(ctx, video, x, y, width, height, scaleX, scaleY, time, intensity) {
+  const numStrips = Math.min(Math.floor(width / 40), 8); // Ограничиваем количество полос
+  
+  ctx.save();
+  for (let i = 0; i < numStrips; i++) {
+    const randomIndex = (frameCounter + i + 50) % RANDOM_CACHE_SIZE;
+    
+    if (fastRandom(randomIndex) < intensity * 0.4) {
+      const stripX = x + (i * 40) + (fastRandom((randomIndex + 1) % RANDOM_CACHE_SIZE) - 0.5) * 20;
+      const stripWidth = 15 + fastRandom((randomIndex + 2) % RANDOM_CACHE_SIZE) * 25;
+      const stripHeight = height * (0.3 + fastRandom((randomIndex + 3) % RANDOM_CACHE_SIZE) * 0.4);
+      const stripY = y + fastRandom((randomIndex + 4) % RANDOM_CACHE_SIZE) * (height - stripHeight);
+      
+      const compressionOffset = fastSin(time * 2 + i) * intensity * 10;
+      
+      ctx.globalAlpha = 0.7 * intensity;
+      ctx.drawImage(
+        video,
+        stripX, stripY, stripWidth, stripHeight,
+        (stripX + compressionOffset) * scaleX, 
+        stripY * scaleY, 
+        stripWidth * scaleX, 
+        stripHeight * scaleY
+      );
+    }
+  }
+  ctx.restore();
+}
+
+// Функция очистки ресурсов для оптимизации памяти
+function cleanupGlitchResources() {
+  // Очищаем кэши периодически для предотвращения утечек памяти
+  if (frameCounter % 1000 === 0) {
+    // Обновляем случайный кэш каждые 1000 кадров
+    for (let i = 0; i < RANDOM_CACHE_SIZE / 10; i++) {
+      const randomIndex = Math.floor(Math.random() * RANDOM_CACHE_SIZE);
+      randomCache[randomIndex] = Math.random();
+    }
+  }
+  
+  // Очищаем datamosh буферы если они слишком большие
+  if (datamoshFrameBuffer.length > FRAME_BUFFER_SIZE * 2) {
+    datamoshFrameBuffer = datamoshFrameBuffer.slice(-FRAME_BUFFER_SIZE);
+  }
+}
 
 </script>
 
